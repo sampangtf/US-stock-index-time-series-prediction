@@ -5,7 +5,9 @@
 Stock Indices are important indicators of the financial market performances as they aggregate the price movements of the most prominent companies with the highest market capitalizations. They are the proxy metrics of economic prosperity and informs the corporate and individual investors on decisions in asset and portfolio management. 
 
 ### Data collection, preprocessing and modeling
-This project aims to model the movement of the monthly S&P 500 and Dow Jones Industrial Average (DJIA) by conducting univariate modeling against their past time series data between 1992 and 2020 (inclusive), as well as investigate the effect of macro-economic variables through multivariate analysis of DJIA. Our team has developed 7 univariate models and 5 multivariate models to predict the stock indices, including the conventional time series models (ARIMA, GARCH, VAR, etc.) and new-found deep learning models (LSTM, Transformers). 
+This project aims to model the movement of the monthly S&P 500 and Dow Jones Industrial Average (DJIA) by conducting univariate modeling against their past time series data between 1992 and 2020 (inclusive), as well as investigate the effect of macro-economic variables through multivariate analysis of DJIA. Our team has developed 7 univariate models and 5 multivariate models to predict the stock indices, including:
+- the conventional time series models (ARIMA, GARCH, VAR, etc.); and 
+- new-found deep learning models (LSTM, Transformers). 
 
 We extracted our indices data from Bloomberg, performed data cleaning and integration with macro-economic factors and exploratory data analysis in terms of stationarity and cross-correlation. We trained most of our models mostly on original time series and some in differenced time series due to the model assumption. 
 
