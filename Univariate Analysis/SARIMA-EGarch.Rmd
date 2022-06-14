@@ -1,0 +1,249 @@
+---
+title: "SARIMA-eGarch - Saran"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r libraries}
+library(zoo,warn.conflicts=FALSE)
+library(lubridate,warn.conflicts=FALSE)
+library(mgcv,warn.conflicts=FALSE)
+library(rugarch,warn.conflicts=FALSE)
+library(xts)
+library(TSA)
+library(xts)
+library(mgcv)
+library(ggplot2)
+library(dynlm)
+library(astsa)
+library(forecast)
+library(lubridate)
+library(data.table)
+library(tseries)
+library(tsDyn)
+library(rugarch)
+```
+
+**Monthly Data Import and Processing**
+```{r Read Montly Data}
+data <- read.csv("Data_Template.csv", head = TRUE)
+tmp_date<-as.Date(data$ï..Date,format='%m/%d/%y')
+SPY <- ts(rev(data[,2]), start=c(1992,1,31),frequency=12)
+DJ <- ts(rev(data[,3]), start=c(1992,1,31),frequency=12)
+```
+
+```{r diferenced data}
+SPY.diff = diff(SPY)
+DJ.diff = diff(DJ)
+```
+
+```{r test/train data}
+n_forward = 36                           ###period forward want to predict
+n = length(SPY)
+nfit = n-n_forward                    ###number rows fit to training set
+
+SPY.train = SPY[1:nfit]
+SPY.test = SPY[(nfit+1):n]
+
+n1 = length(DJ)
+nfit1 = n1-n_forward                    ###number rows fit to training set
+DJ.train = DJ[1:nfit]
+DJ.test = DJ[(nfit1+1):n1]
+
+```
+
+#### SARIMA Fit ##########################
+```{r - SARIMA SPY 1}
+norder=10
+sorder=2
+
+p = c(1:norder)-1; q = c(1:norder)-1
+sp = c(1:norder)-1; sq = c(1:norder)-1
+
+test_modelA <- function(sp, sq) { 
+  mod = arima(SPY.train, order = c(0, 2, 1), seasonal = list(order = c(sp, 1, sq), period =12)) 
+  current.aic = AIC(mod)
+  
+  df = data.frame(0, 2, 1, sp, 1, sq, 12, current.aic) 
+  names(df) <- c("p", "d", "q","P", "D", "Q","S", "AIC")
+  print(paste(0, 2, 1, sp, 1, sq, 12,current.aic, sep=" "))
+  return(df) 
+} 
+ 
+orders_spy = data.frame(Inf, Inf, Inf, Inf,Inf, Inf, Inf, Inf)
+
+names(orders_spy) <- c("p", "d", "q", "P", "D", "Q","S", "AIC") 
+
+for (sp in 1:sorder) { 
+  for (sq in 1:sorder) {
+      possibleError <- tryCatch( 
+        orders_spy <- rbind(orders_spy, test_modelA(sp, sq)),
+        error = function(e) {e} 
+      ) 
+      if (inherits(possibleError, "error")) 
+        next 
+  }
+} 
+orders_spy <- orders_spy[order(-orders_spy$AIC), ]
+print(orders_spy)
+
+```
+
+```{r - SARIMA SPY 2}
+
+## SARIMA with p=0,d=2,q=1 & sp=1, sd=1,sq=1
+sarima.spy = arima(SPY.train, order = c(0, 2, 1), seasonal = list(order = c(1, 1, 1), period =12))
+
+## Predict 3 years ahead
+sarima.spy.ahead = sarima.for(SPY.train,36,0,2,1,1,1,1,12)
+pred_SARIMA_SPY = sarima.spy.ahead$pred
+
+## Accuracy Measures
+### Mean Squared Prediction Error (MSPE)
+mean((pred_SARIMA_SPY-SPY.test)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred_SARIMA_SPY-SPY.test))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred_SARIMA_SPY-SPY.test)/SPY.test)
+### Precision Measure (PM)
+sum((pred_SARIMA_SPY-SPY.test)^2)/sum((SPY.test-mean(SPY.test))^2)
+```
+
+```{r - SARIMA DJ}
+norder=10
+sorder=2
+
+p = c(1:norder)-1; q = c(1:norder)-1
+sp = c(1:norder)-1; sq = c(1:norder)-1
+
+test_modelA <- function(sp, sq) { 
+  mod = arima(DJ.train, order = c(2, 2, 3), seasonal = list(order = c(sp, 1, sq), period =12)) 
+  current.aic = AIC(mod)
+  
+  df = data.frame(2, 2, 3, sp, 1, sq, 12, current.aic) 
+  names(df) <- c("p", "d", "q","P", "D", "Q","S", "AIC")
+  print(paste(2, 2, 3, sp, 1, sq, 12,current.aic, sep=" "))
+  return(df) 
+} 
+ 
+orders_dj = data.frame(Inf, Inf, Inf, Inf,Inf, Inf, Inf, Inf)
+
+names(orders_dj) <- c("p", "d", "q", "P", "D", "Q","S", "AIC") 
+
+for (sp in 1:sorder) { 
+  for (sq in 1:sorder) {
+      possibleError <- tryCatch( 
+        orders_dj <- rbind(orders_dj, test_modelA(sp, sq)),
+        error = function(e) {e} 
+      ) 
+      if (inherits(possibleError, "error")) 
+        next 
+  }
+} 
+orders_dj <- orders_dj[order(-orders_dj$AIC), ]
+print(orders_dj)
+
+```
+
+```{r - SARIMA DJ 2}
+
+## SARIMA with p=0,d=2,q=1 & sp=1, sd=1,sq=1
+sarima.dj = arima(DJ.train, order = c(2, 2, 3), seasonal = list(order = c(1, 1, 2), period =12))
+
+## Predict 3 years ahead
+sarima.dj.ahead = sarima.for(DJ.train,36,2,2,3,1,1,2,12)
+pred_SARIMA_dj = sarima.dj.ahead$pred
+
+## Accuracy Measures
+### Mean Squared Prediction Error (MSPE)
+mean((pred_SARIMA_dj-DJ.test)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred_SARIMA_dj-DJ.test))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred_SARIMA_dj-DJ.test)/DJ.test)
+### Precision Measure (PM)
+sum((pred_SARIMA_dj-DJ.test)^2)/sum((DJ.test-mean(DJ.test))^2)
+```
+
+#### eGarch Fit ##########################
+
+```{r - eGarch SPY}
+
+spec.1 = ugarchspec(variance.model=list(model = "eGARCH",garchOrder=c(1,1)),
+                    mean.model=list(armaOrder=c(3,3),include.mean=T), distribution.model="std")
+
+#Prediction of the return time series and the volatility sigma
+nfore = 36
+
+fore.series.1 = NULL; fore.sigma.1 = NULL
+
+for(f in 1: nfore)
+  {
+  #Fit models
+  data = SPY.train
+  
+  final.model.1 = ugarchfit(spec.1, data, solver = 'hybrid')    
+  
+  #Forecast
+  fore = ugarchforecast(final.model.1, n.ahead=1)
+  fore.series.1 = c(fore.series.1, fore@forecast$seriesFor)
+  fore.sigma.1 = c(fore.sigma.1, fore@forecast$sigmaFor)
+}
+
+#Compare squared observed time series with variance forecasts
+ymin = min(c(as.vector(SPY.test^2),fore.sigma.1^2))
+ymax = max(c(as.vector(SPY.test^2),fore.sigma.1^2))
+
+data.plot = SPY.test
+names(data.plot)="Fore"
+
+plot(SPY.test^2,type="l", ylim=c(ymin,ymax), xlab=" ", ylab="S&P 500",
+     main="Variance Prediction Comparison")
+data.plot$Fore=fore.sigma.1^2
+#points(data.plot,lwd= 2, col="blue")
+```
+
+```{r - eGarch DJ}
+
+spec.1 = ugarchspec(variance.model=list(model = "eGARCH",garchOrder=c(1,1)),
+                    mean.model=list(armaOrder=c(1,0),include.mean=T), distribution.model="std")
+
+#Prediction of the return time series and the volatility sigma
+nfore = 36
+
+fore.series.1 = NULL; fore.sigma.1 = NULL
+
+for(f in 1: nfore)
+  {
+  #Fit models
+  data = DJ.train
+  
+  final.model.1 = ugarchfit(spec.1, data, solver = 'hybrid')    
+  
+  #Forecast
+  fore = ugarchforecast(final.model.1, n.ahead=1)
+  fore.series.1 = c(fore.series.1, fore@forecast$seriesFor)
+  fore.sigma.1 = c(fore.sigma.1, fore@forecast$sigmaFor)
+}
+
+#Compare squared observed time series with variance forecasts
+ymin = min(c(as.vector(DJ.test^2),fore.sigma.1^2))
+ymax = max(c(as.vector(DJ.test^2),fore.sigma.1^2))
+
+data.plot = DJ.test
+names(data.plot)="Fore"
+
+plot(DJ.test^2,type="l", ylim=c(ymin,ymax), xlab=" ", ylab="S&P 500",
+     main="Variance Prediction Comparison")
+data.plot$Fore=fore.sigma.1^2
+#points(data.plot,lwd= 2, col="blue")
+```

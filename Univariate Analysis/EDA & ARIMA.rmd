@@ -1,0 +1,404 @@
+---
+title: "ISYE 6402 Project EDA and ARIMA"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+```{r setup, include = FALSE}
+
+# Set up the default parameters
+# 1. The code block will be shown in the document
+# 2. set up figure display size
+# 3. turn off all the warnings and messages
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width = 8, fig.height = 4)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+```
+
+## Background
+
+
+
+##Data import and cleaning
+
+```{r}
+## Libraries used within this homework are uploaded here
+library(zoo,warn.conflicts=FALSE)
+library(lubridate,warn.conflicts=FALSE)
+library(mgcv,warn.conflicts=FALSE)
+library(rugarch,warn.conflicts=FALSE)
+library(readxl)
+library(xts)
+```
+
+```{r}
+#importing the data
+data_small <- read_excel("Data_Template.xlsx")
+data_full <- read.csv("final.csv", head = TRUE)
+
+data <- data_small
+
+#cleaning the data
+
+#dates to date format
+data$Date<-as.Date(data$Date, format='%Y-%m-%d/')
+data = data[order(data$Date), ]
+
+?xts()
+#xts format
+data$SPY <- xts(data$SPY, data$Date)
+data$DJ <- xts(data$DJ, data$Date)
+
+
+plot(data$SPY, main="S&P 500", ylab="Index")
+plot(data$DJ, main="Dow Jones", ylab=" Index")
+ 
+```
+
+## Exploratory Data Analysis and Trend Estimation
+
+```{r}
+# time point variables
+time.pts = c(1:length(data$SPY))
+time.pts = c(time.pts - min(time.pts))/max(time.pts)
+start_date = data$Date[order(data$Date)][1]
+start_date_c = c(as.numeric(format(start_date, format="%Y")), 
+                 as.numeric(format(start_date, format="%m")),
+                 as.numeric(format(start_date, format="%d")))
+
+# Spline model
+gam.fit.SP = gam(data$SPY~s(time.pts))
+SP.fitted = ts(fitted(gam.fit.SP),start=start_date_c,frequency=12)
+
+gam.fit.DJ = gam(data$DJ~s(time.pts))
+DJ.fitted = ts(fitted(gam.fit.DJ),start=start_date_c,frequency=12)
+
+# plotting
+
+ts.plot(ts(data$SPY, start=start_date_c,frequency=12) ,ylab="S&P 500", main = "S&P Trend Prediction")
+lines(SP.fitted,lwd=2,col="red", type='l')
+grid()
+
+ts.plot(ts(data$DJ, start=start_date_c,frequency=12),ylab="Dow Jones", main = "Dow Jones Trend Prediction")
+lines(DJ.fitted,lwd=2,col="red", type='l')
+grid()
+
+```
+
+
+The trends and fluctuations of Dow Jones and S&P are largely the same. There is no observable seasonality. 
+
+# Differenced data
+```{r}
+start_date =  data$Date[order(data$Date)][2]
+start_date_c = c(as.numeric(format(start_date, format="%Y")), 
+                 as.numeric(format(start_date, format="%m")),
+                 as.numeric(format(start_date, format="%d")))
+
+diff.SP = ts(diff(data$SPY)[-1], start=start_date_c,frequency=12)
+diff.DJ =  ts(diff(data$DJ)[-1], start=start_date_c,frequency=12)
+
+ts.plot(diff.DJ, col="red", main="Compare differenced data of S&P and DowJones")
+lines(diff.SP, col="blue")
+grid()
+
+ts.plot(diff.SP, col="blue", main="Differenced S&P")
+ts.plot(diff.DJ, col="red", main="Differenced DowJones")
+
+
+```
+## ARIMA Model
+
+```{r}
+
+n_forward = 2                           ###period forward want to predict
+n = length(data$SPY)
+nfit = n-n_forward                    ###number rows fit to training set
+SPY.train = data$SPY[1:nfit]
+SPY.test = data$SPY[(nfit+1):n]
+
+DJ.train = data$DJ[1:nfit]
+DJ.test = data$DJ[(nfit+1):n]
+
+test_modelA <- function(p, d, q, data) {
+  mod = arima(data, order = c(p, d, q), method = "ML")
+  current.aic = AIC(mod)
+  df = data.frame(p, d, q, current.aic)
+  names(df) <- c("p","d","q","AIC")
+  print(paste(p,d,q,current.aic,sep=" "))
+  return(df)
+}
+
+
+##### S & P Model #####
+orders.SP = data.frame(Inf,Inf,Inf,Inf)
+names(orders) <- c("p","d","q","AIC")
+
+for (p in 0:8) {
+  for (d in 0:2) {
+    for (q in 0:8) {
+      possibleError <- tryCatch(
+        orders.SP <- rbind(orders, test_modelA(p, d, q, data=SPY.train)),
+        error = function(e) {e}
+      )
+      if (inherits(possibleError, "error"))
+        next
+    }
+  }
+}
+orders.SP <- orders.SP[order(-orders.SP$AIC), ]
+tail(orders.SP)
+
+
+
+##### Dow Jones #####
+orders.DJ = data.frame(Inf,Inf,Inf,Inf)
+names(orders) <- c("p","d","q","AIC")
+
+for (p in 0:8) {
+  for (d in 0:2) {
+    for (q in 0:8) {
+      possibleError <- tryCatch(
+        orders.DJ <- rbind(orders, test_modelA(p, d, q, data=SPY.train)),
+        error = function(e) {e}
+      )
+      if (inherits(possibleError, "error"))
+        next
+    }
+  }
+}
+orders.DJ <- orders.DJ[order(-orders.DJ$AIC), ]
+tail(orders.DJ)
+
+
+
+```
+
+
+# Residual Analysis of ARIMA Model
+```{r}
+## Final Model
+mod.SP.1 = arima(SPY.train,order = c(7, 2 ,8), method='ML')
+# mod.SP.2 = arima(SPY.train,order = c(4, 2 ,5), method='ML')
+
+mod.DJ.1 = arima(DJ.train,order = c(7, 2 ,8), method='ML')
+# mod.DJ.2 = arima(DJ.train,order = c(4, 2 ,5), method='ML')
+
+mod.SP.1
+mod.DJ.1
+
+
+### Residual Analysis
+resid.SP <- resid(mod.SP.1)
+resid.DJ <- resid(mod.DJ.1)
+
+### SP
+
+plot(resid.SP, ylab='Standardized Residuals',type='o',main="Residual Plot" )
+abline(h=0, col='red')
+acf(as.vector(resid.SP), lag.max=12*5, main="ACF: S&P ARIMA Residual")
+pacf(as.vector(resid.SP), lag.max=12*5, main="PACF: S&P ARIMA Residual")
+hist(resid.SP,xlab='Standardized Residuals',main='Histogram: Residuals')
+qqnorm(resid.SP)
+qqline(resid.SP)
+
+
+### DJ
+
+plot(resid.DJ, ylab='Standardized Residuals',type='o',main="Residual Plot" )
+abline(h=0, col='red')
+acf(as.vector(resid.DJ), lag.max=12*5, main="ACF: DowJon ARIMA Residual")
+pacf(as.vector(resid.DJ), lag.max=12*5, main="PACF: DowJon ARIMA Residual")
+hist(resid.DJ,xlab='Standardized Residuals',main='Histogram: Residuals')
+qqnorm(resid.DJ)
+qqline(resid.DJ)
+
+## hypothesis testing
+porder=7
+qorder=8
+Box.test(mod.SP.1$resid, lag = (porder+qorder+1), type = "Box-Pierce", fitdf = (porder+qorder))
+Box.test(mod.SP.1$resid, lag = (porder+qorder+1), type = "Ljung-Box", fitdf = (porder+qorder))
+
+Box.test(mod.DJ.1$resid, lag = (porder+qorder+1), type = "Box-Pierce", fitdf = (porder+qorder))
+Box.test(mod.DJ.1$resid, lag = (porder+qorder+1), type = "Ljung-Box", fitdf = (porder+qorder))
+
+
+
+```
+
+The p-values of the ljung-box tests are small and reject the null hypothesis at confidence level of 95%. It is plausible that the residuals are correlated for both ARIMA model fitted into S&P and DowJones.
+
+## ARMA-GARCH Model
+```{r}
+
+### S&P
+
+# Step 1: Initial ARMA orders
+test_modelA1 <- function(p, d, q) {
+  mod = arima(diff.SP, order = c(p, d, q), method = "ML") 
+  current.aic = AIC(mod)    
+  df = data.frame(p, d, q, current.aic)
+  names(df) <- c("p", "d", "q", "AIC") 
+  print(paste(p,d,q,current.aic,sep=" "))
+  return(df)
+}
+
+ordersARIMA = data.frame(Inf, Inf, Inf, Inf)
+names(ordersARIMA) <- c("p", "d", "q", "AIC")
+for (p in 0:8) { 
+  for (d in 0:0) {
+    for (q in 0:8) { 
+      possibleError <- tryCatch(
+            ordersARIMA <- rbind(ordersARIMA, test_modelA1(p, d, q)),
+            error = function(e) {e}
+      )
+      if (inherits(possibleError, "error")) 
+        next
+    } 
+  }
+}
+ordersARIMA <- ordersARIMA[order(-ordersARIMA$AIC), ]
+tail(ordersARIMA)
+
+### ARIMA Initial Orders -> (7, 1, 6) is chosen
+porder = tail(ordersARIMA, n=1)$p
+qorder = tail(ordersARIMA, n=1)$q
+
+# 
+
+# Step 2: Initial GARCH Order
+#ARIMA-GARCH: Select GARCH order
+test_modelAGG <- function(m,n){
+    spec = ugarchspec(variance.model=list(garchOrder=c(m,n)),
+                      mean.model=list(armaOrder=c(porder,qorder),
+                                      include.mean=T),
+                      distribution.model="std")
+    fit = ugarchfit(spec, diff.SP, solver = 'hybrid')
+    current.bic = infocriteria(fit)[2]
+    df = data.frame(m,n,current.bic)
+    names(df) <- c("m","n","BIC")
+    print(paste(m,n,current.bic,sep=" "))
+    return(df)
+}
+
+ordersAGG = data.frame(Inf,Inf,Inf)
+names(ordersAGG) <- c("m","n","BIC")
+
+for (m in 0:3){
+    for (n in 0:3){
+        possibleError <- tryCatch(
+            ordersAGG<-rbind(ordersAGG,test_modelAGG(m,n)),
+            error=function(e) e
+        )
+        if(inherits(possibleError, "error")) next
+    }
+}
+ordersAGG <- ordersAGG[order(-ordersAGG$BIC),]
+tail(ordersAGG)
+# 1,1
+
+### GARCH Initial Orders -> (1, 1) is chosen
+morder = tail(ordersAGG, n=1)$m
+norder = tail(ordersAGG, n=1)$n
+
+#Step 3: ARMA order update
+#ARIMA-GARCH: Select ARIMA order
+test_modelAGA <- function(p,q){
+    spec = ugarchspec(variance.model=list(garchOrder=c(morder,norder)),
+                      mean.model=list(armaOrder=c(p,q),
+                                      include.mean=T),
+                      distribution.model="std")
+    fit = ugarchfit(spec, diff.SP, solver = 'hybrid')
+    current.bic = infocriteria(fit)[2]
+    df = data.frame(p,q,current.bic)
+    names(df) <- c("p","q","BIC")
+    print(paste(p,q,current.bic,sep=" "))
+    return(df)
+}
+
+ordersAGA = data.frame(Inf,Inf,Inf)
+names(ordersAGA) <- c("p","q","BIC")
+for (p in 0:4){
+    for (q in 0:4){
+        possibleError <- tryCatch(
+            ordersAGA<-rbind(ordersAGA,test_modelAGA(p,q)),
+            error=function(e) e
+        )
+        if(inherits(possibleError, "error")) next
+    }
+}
+ordersAGA <- ordersAGA[order(-ordersAGA$BIC),]
+tail(ordersAGA)
+# Don't choose 0,0 since it's trivial.
+#1,0
+
+### ARMA Update -> (0, 1) is chosen since (0, 0) is trivial and not selected. 
+#### Also, note that (1, 0) and (0, 1) has the same BIC. 
+#### Since we are estimating variance of Z_t in GARCH, 
+#### (0, 1) is preferred to (1, 0).
+porder = 1; qorder = 0
+
+
+# Step 4: GARCH order update
+test_modelAGG <- function(m,n){
+    spec = ugarchspec(variance.model=list(garchOrder=c(m,n)),
+                      mean.model=list(armaOrder=c(porder,qorder),
+                                      include.mean=T), distribution.model="std")
+    fit = ugarchfit(spec, diff.SP, solver = 'hybrid')
+    current.bic = infocriteria(fit)[2]
+    df = data.frame(m,n,current.bic)
+    names(df) <- c("m","n","BIC")
+    print(paste(m,n,current.bic,sep=" "))
+    return(df)
+}
+
+ordersAGG = data.frame(Inf,Inf,Inf)
+names(ordersAGG) <- c("m","n","BIC")
+
+for (m in 0:3){
+    for (n in 0:3){
+        possibleError <- tryCatch(
+            ordersAGG<-rbind(ordersAGG,test_modelAGG(m,n)),
+            error=function(e) e
+        )
+        if(inherits(possibleError, "error")) next
+    }
+}
+ordersAGG <- ordersAGG[order(-ordersAGG$BIC),]
+tail(ordersAGG)
+
+#### Final ARMA(1, 0)+GARCH(1,1) selected 
+morder = tail(ordersAGG, n=1)$m
+norder = tail(ordersAGG, n=1)$n
+
+### Final Order Selection
+morder = 1
+norder = 1
+porder = 1
+qorder = 0
+
+# Building Final Model
+spec.SP = ugarchspec(variance.model=list(garchOrder=c(morder, norder)),
+                 mean.model=list(armaOrder=c(porder, qorder),
+                 include.mean=T), distribution.model="std")
+final.model.SP = ugarchfit(spec.SP, diff.SP, solver = 'hybrid')
+
+## compare Information Criteria
+infocriteria(final.model.SP)
+
+## Residual Analysis
+resids.final.model = residuals(final.model.SP)
+acf(resids.final.model,main="ACF of ARCH Residuals")
+acf(resids.final.model^2,main="ACF of Squared ARCH Residuals")
+Box.test(resids.final.model,lag=10,type='Ljung')
+Box.test(resids.final.model^2,lag=10,type='Ljung')
+qqnorm(resids.final.model)
+```
+
+```{r}
+
+```
+

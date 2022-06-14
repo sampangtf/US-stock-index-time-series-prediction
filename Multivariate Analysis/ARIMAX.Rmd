@@ -1,0 +1,572 @@
+---
+title: "ARIMAX"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Libarary
+
+```{r}
+library(zoo,warn.conflicts=FALSE)
+library(lubridate,warn.conflicts=FALSE)
+library(mgcv,warn.conflicts=FALSE)
+library(rugarch,warn.conflicts=FALSE)
+library(readxl)
+library(xts)
+```
+
+#############################################
+########################### without lags
+#############################################
+
+### Data Upload
+```{r}
+rm(list=ls()) 
+
+data <- read_excel("Data_Template.xlsx")
+
+#dates to date format
+data$Date<-as.Date(data$Date, format='%Y-%m-%d/')
+data = data[order(data$Date), ]
+
+Date<-as.Date(data$Date, format='%Y-%m-%d')
+#xts_SPY=xts(data[,"SPY"],Date)
+xts_DJ=xts(data[,"DJ"],Date)
+xts_CPI=xts(data[,"CPI"],Date)
+xts_PPI=xts(data[,"PPI"],Date)
+#xts_Real_GDP=xts(data[,"Real GDP"],Date)
+xts_Industrial_Production=xts(data[,"Industrial Production"],Date)
+xts_Balance_of_Trade=xts(data[,"Balance of Trade"],Date)
+xts_M1=xts(data[,"M1"],Date)
+xts_Housing_Starts=xts(data[,"Housing Starts"],Date)
+xts_Employment_Report=xts(data[,"Employment Report"],Date)
+xts_Treasury_Yields=xts(data[,"Treasury Yields"],Date)
+
+all_x_reg = cbind(xts_CPI,xts_PPI,xts_Industrial_Production,xts_Balance_of_Trade,xts_M1,xts_Housing_Starts,xts_Employment_Report,xts_Treasury_Yields)
+```
+
+```{r}
+n_test = 36
+n_train = dim(all_x_reg)[1] - 36
+
+DJ = xts_DJ[1:length(xts_DJ)]
+
+train_x_reg = all_x_reg[1:(dim(all_x_reg)[1]-n_test),]
+test.ts_reg = all_x_reg[(dim(all_x_reg)[1]-n_test+1):dim(all_x_reg)[1],]
+
+DJ.train <- DJ [0:(length(DJ) - n_test)]
+DJ.test <- DJ [(length(DJ) - n_test+1):length(DJ)]
+
+```
+
+
+```{r}
+norder <- 6
+p <- c(1:norder) - 1
+q <- c(1:norder) - 1
+aic <- matrix(0, norder, norder)
+for (i in 1:norder) {
+  for (j in 1:norder) {
+    
+  modij <- arima(DJ.train, order = c(p[i], 1, q[j]), xreg = train_x_reg, method='ML')
+  
+aic[i, j] <- modij$aic 
+
+  }
+}
+
+aicv <- as.vector(aic)
+par(mfrow = c(1, 1))
+plot(aicv, ylab = "AIC values")
+
+indexp <- rep(c(1:norder), norder)
+indexq <- rep(c(1:norder), each = norder)
+indexaic <- which(aicv == min(aicv))
+porder <- indexp[indexaic] - 1
+
+qorder <- indexq[indexaic] - 1
+
+##arma order
+c(porder, 1, qorder) ##> 2,1,2 selected 
+
+min_aic = min(aicv)
+final.model <- arima(DJ.train, order = c(porder, 1, qorder),xreg = train_x_reg, method="ML")
+                  
+par(mfrow = c(2, 2))
+plot(resid(final.model), ylab = 'Residuals')
+abline(h = 0)
+acf(as.vector(resid(final.model)), main = 'Residuals ACF')
+pacf(as.vector(resid(final.model)), main = 'Residuals PACF')
+qqnorm(resid(final.model))
+qqline(resid(final.model))
+
+```
+
+
+```{r}
+library(tseries)
+
+#### Test for Uncorrelated Residuals for the final model
+Box.test(final.model$resid,lag = (porder + qorder + 1),type = "Box-Pierce",fitdf = (porder + qorder))
+
+Box.test(final.model$resid,lag = (porder + qorder + 1),type = "Ljung-Box",fitdf= (porder + qorder))
+
+jarque.bera.test(resid(final.model))
+shapiro.test(resid(final.model))
+
+adf.test(resid(final.model), alternative = "stationary")
+##Kwiatkowski-Phillips-Schmidt-Shin (KPSS) test :Null Hypothesis: Stationary Time Series
+kpss.test(resid(final.model))
+
+par(mfrow=c(2,2))
+plot(final.model$resid, ylab='Residuals',type='o',main="Residual Plot")
+abline(h=0)
+hist(final.model$resid,xlab='Residuals',main='Histogram: Residuals')
+acf(final.model$resid,main=" ACF: Residuals")
+pacf(final.model$resid,main=" PACF: Residuals")
+qqnorm(final.model$resid)
+
+```
+
+```{r prediction}
+
+model_arimax_pred_model1 = matrix(NA, n_test, 1)
+lbound = NULL
+ubound = NULL
+
+n_f = 3
+
+for (idx in 1:12){
+nfit = length(DJ) - n_test + (idx-1)*n_f-1
+
+outresid = arima(DJ[1:nfit], order = c(porder, 1, qorder),xreg = all_x_reg[1:nfit,], method = "ML")
+
+outpredresid = predict(outresid,all_x_reg[(nfit+1):(nfit+2)],
+                       n.ahead=n_f)
+
+ubound = c(ubound, outpredresid$pred[1]+1.96*outpredresid$se)
+lbound = c(lbound, outpredresid$pred[1]-1.96*outpredresid$se)
+model_arimax_pred_model1 [((idx-1)*n_f+1):(idx*n_f)] = outpredresid$pred
+}
+
+############################## measures for all 36 periods
+data_pred = model_arimax_pred_model1 
+data_true = as.matrix(DJ.test)
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+print('--------------')
+############################## measures for pre-pandemic
+data_pred = model_arimax_pred_model1[1:12]
+data_true = as.matrix(DJ.test[1:12])
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+print('--------------')
+############################## measures for post-pandemic
+data_pred =  model_arimax_pred_model1[13:36]
+data_true = as.matrix(DJ.test[13:36])
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+
+```
+
+#############################################
+########################### MoDEL2: with lag based on VAR output and max lags
+#############################################
+
+```{r}
+data <- read_excel("Data_Template.xlsx")
+
+#dates to date format
+data$Date<-as.Date(data$Date, format='%Y-%m-%d/')
+data = data[order(data$Date), ]
+
+
+Date<-as.Date(data$Date, format='%Y-%m-%d')
+#xts_SPY=xts(data[,"SPY"],Date)
+xts_DJ=xts(data[,"DJ"],Date)
+xts_CPI=xts(data[,"CPI"],Date)
+xts_PPI=xts(data[,"PPI"],Date)
+#xts_Real_GDP=xts(data[,"Real GDP"],Date)
+xts_Industrial_Production=xts(data[,"Industrial Production"],Date)
+xts_Balance_of_Trade=xts(data[,"Balance of Trade"],Date)
+xts_M1=xts(data[,"M1"],Date)
+xts_Housing_Starts=xts(data[,"Housing Starts"],Date)
+xts_Employment_Report=xts(data[,"Employment Report"],Date)
+xts_Treasury_Yields=xts(data[,"Treasury Yields"],Date)
+
+# all_x_reg = cbind(xts_CPI,xts_PPI, xts_Industrial_Production,xts_Balance_of_Trade,xts_M1,xts_Housing_Starts,xts_Employment_Report,xts_Treasury_Yields)
+
+#all_x_reg = cbind( xts_Industrial_Production,xts_Employment_Report)
+
+all_x_reg = cbind(xts_CPI,xts_Industrial_Production,xts_Balance_of_Trade,xts_M1,xts_Employment_Report,xts_Treasury_Yields)
+
+all_x_reg$CPI = stats::lag(all_x_reg$CPI, 3)
+all_x_reg$Industrial.Production = stats::lag(all_x_reg$Industrial.Production, 3)
+all_x_reg$Balance.of.Trade = stats::lag(all_x_reg$Balance.of.Trade, 2)
+all_x_reg$M1 = stats::lag(all_x_reg$M1 , 3)
+all_x_reg$Treasury.Yields = stats::lag(all_x_reg$Treasury.Yields  , 2)
+
+all_x_reg = na.omit(all_x_reg)
+
+```
+
+```{r}
+n_test = 36
+n_train = dim(all_x_reg)[1] - 36
+
+DJ = xts_DJ[4:length(xts_DJ)]
+
+train_x_reg = all_x_reg[1:(dim(all_x_reg)[1]-n_test),]
+test.ts_reg = all_x_reg[(dim(all_x_reg)[1]-n_test+1):dim(all_x_reg)[1],]
+
+DJ.train <- DJ [0:(length(DJ) - n_test)]
+DJ.test <- DJ [(length(DJ) - n_test+1):length(DJ)]
+
+```
+
+
+```{r}
+norder <- 6
+p <- c(1:norder) - 1
+q <- c(1:norder) - 1
+aic <- matrix(0, norder, norder)
+for (i in 1:norder) {
+  for (j in 1:norder) {
+    
+  modij <- arima(DJ.train, order = c(p[i], 1, q[j]), xreg = train_x_reg, method='ML')
+  
+aic[i, j] <- modij$aic 
+
+  }
+}
+
+aicv <- as.vector(aic)
+par(mfrow = c(1, 1))
+plot(aicv, ylab = "AIC values")
+
+indexp <- rep(c(1:norder), norder)
+indexq <- rep(c(1:norder), each = norder)
+indexaic <- which(aicv == min(aicv))
+porder <- indexp[indexaic] - 1
+
+qorder <- indexq[indexaic] - 1
+
+##arma order
+c(porder, 1, qorder) ##> 4,1,4 selected 
+
+min_aic = min(aicv)
+final.model <- arima(DJ.train, order = c(porder, 1, qorder),xreg = train_x_reg, method="ML")
+                  
+par(mfrow = c(2, 2))
+plot(resid(final.model), ylab = 'Residuals')
+abline(h = 0)
+acf(as.vector(resid(final.model)), main = 'Residuals ACF')
+pacf(as.vector(resid(final.model)), main = 'Residuals PACF')
+qqnorm(resid(final.model))
+qqline(resid(final.model))
+
+```
+
+
+```{r}
+library(tseries)
+
+#### Test for Uncorrelated Residuals for the final model
+Box.test(final.model$resid,lag = (porder + qorder + 1),type = "Box-Pierce",fitdf = (porder + qorder))
+
+Box.test(final.model$resid,lag = (porder + qorder + 1),type = "Ljung-Box",fitdf= (porder + qorder))
+
+jarque.bera.test(resid(final.model))
+shapiro.test(resid(final.model))
+
+adf.test(resid(final.model), alternative = "stationary")
+##Kwiatkowski-Phillips-Schmidt-Shin (KPSS) test :Null Hypothesis: Stationary Time Series
+kpss.test(resid(final.model))
+
+par(mfrow=c(2,2))
+plot(final.model$resid, ylab='Residuals',type='o',main="Residual Plot")
+abline(h=0)
+hist(final.model$resid,xlab='Residuals',main='Histogram: Residuals')
+acf(final.model$resid,main=" ACF: Residuals")
+pacf(final.model$resid,main=" PACF: Residuals")
+qqnorm(final.model$resid)
+
+```
+
+```{r prediction}
+
+model_arimax_pred_model2 = matrix(NA, n_test, 1)
+lbound = NULL
+ubound = NULL
+
+n_f = 3
+
+for (idx in 1:12){
+nfit = length(DJ) - n_test + (idx-1)*n_f-1
+
+outresid = arima(DJ[1:nfit], order = c(porder, 1, qorder),xreg = all_x_reg[1:nfit,], method = "ML")
+
+outpredresid = predict(outresid,all_x_reg[(nfit+1):(nfit+2)],
+                       n.ahead=n_f)
+
+ubound = c(ubound, outpredresid$pred[1]+1.96*outpredresid$se)
+lbound = c(lbound, outpredresid$pred[1]-1.96*outpredresid$se)
+model_arimax_pred_model2[((idx-1)*n_f+1):(idx*n_f)] = outpredresid$pred
+}
+
+############################## measures for all 36 periods
+data_pred = model_arimax_pred_model2
+data_true = as.matrix(DJ.test)
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+print('--------------')
+############################## measures for pre-pandemic
+data_pred = model_arimax_pred_model2[1:12]
+data_true = as.matrix(DJ.test[1:12])
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+print('--------------')
+############################## measures for post-pandemic
+data_pred =  model_arimax_pred_model2[13:36]
+data_true = as.matrix(DJ.test[13:36])
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+
+```
+
+#############################################
+########################### MODEL3: With only lag 1 balance of trade
+#############################################
+
+```{r}
+data <- read_excel("Data_Template.xlsx")
+
+#dates to date format
+data$Date<-as.Date(data$Date, format='%Y-%m-%d/')
+data = data[order(data$Date), ]
+
+Date<-as.Date(data$Date, format='%Y-%m-%d')
+
+xts_DJ=xts(data[,"DJ"],Date)
+xts_Balance_of_Trade=xts(data[,"Balance of Trade"],Date)
+
+all_x_reg = xts_Balance_of_Trade
+
+all_x_reg = stats::lag(all_x_reg, 1)
+
+xts_DJ = xts_DJ[2:length(xts_DJ)]
+all_x_reg = all_x_reg[2:length(all_x_reg)]
+
+```
+
+```{r}
+n_test = 36
+n = dim(all_x_reg)[1]
+n_train = n - 36
+
+DJ = xts_DJ
+
+train_x_reg = all_x_reg[1:(n-n_test),]
+test.ts_reg = all_x_reg[(n-n_test+1):n,]
+
+DJ.train <- DJ [1:(n - n_test)]
+DJ.test <- DJ [(n - n_test+1):length(DJ)]
+
+```
+
+
+```{r}
+norder <- 6
+p <- c(1:norder) - 1
+q <- c(1:norder) - 1
+aic <- matrix(0, norder, norder)
+for (i in 1:norder) {
+  for (j in 1:norder) {
+    
+  modij <- arima(DJ.train, order = c(p[i], 1, q[j]), xreg = train_x_reg, method='ML')
+  
+aic[i, j] <- modij$aic 
+
+  }
+}
+
+aicv <- as.vector(aic)
+par(mfrow = c(1, 1))
+plot(aicv, ylab = "AIC values")
+
+indexp <- rep(c(1:norder), norder)
+indexq <- rep(c(1:norder), each = norder)
+indexaic <- which(aicv == min(aicv))
+porder <- indexp[indexaic] - 1
+
+qorder <- indexq[indexaic] - 1
+
+##arma order
+c(porder, 1, qorder) ##> 3,1,3 selected 
+
+min_aic = min(aicv)
+final.model <- arima(DJ.train, order = c(porder, 1, qorder),xreg = train_x_reg, method="ML")
+                  
+par(mfrow = c(2, 2))
+plot(resid(final.model), ylab = 'Residuals')
+abline(h = 0)
+acf(as.vector(resid(final.model)), main = 'Residuals ACF')
+pacf(as.vector(resid(final.model)), main = 'Residuals PACF')
+qqnorm(resid(final.model))
+qqline(resid(final.model))
+
+```
+
+
+```{r}
+library(tseries)
+
+#### Test for Uncorrelated Residuals for the final model
+Box.test(final.model$resid,lag = (porder + qorder + 1),type = "Box-Pierce",fitdf = (porder + qorder))
+
+Box.test(final.model$resid,lag = (porder + qorder + 1),type = "Ljung-Box",fitdf= (porder + qorder))
+
+jarque.bera.test(resid(final.model))
+shapiro.test(resid(final.model))
+
+adf.test(resid(final.model), alternative = "stationary")
+##Kwiatkowski-Phillips-Schmidt-Shin (KPSS) test :Null Hypothesis: Stationary Time Series
+kpss.test(resid(final.model))
+
+
+par(mfrow=c(2,2))
+plot(final.model$resid, ylab='Residuals',type='o',main="Residual Plot")
+abline(h=0)
+hist(final.model$resid,xlab='Residuals',main='Histogram: Residuals')
+acf(final.model$resid,main=" ACF: Residuals")
+pacf(final.model$resid,main=" PACF: Residuals")
+qqnorm(final.model$resid)
+
+```
+
+```{r prediction}
+
+model_arimax_pred_model3 = matrix(NA, n_test, 1)
+lbound = NULL
+ubound = NULL
+
+n_f = 3
+
+for (idx in 1:12){
+nfit = length(DJ) - n_test + (idx-1)*n_f-1
+
+outresid = arima(DJ[1:nfit], order = c(porder, 1, qorder),xreg = all_x_reg[1:nfit,], method = "ML")
+
+outpredresid = predict(outresid,all_x_reg[(nfit+1):(nfit+2)],
+                       n.ahead=n_f)
+
+ubound = c(ubound, outpredresid$pred[1]+1.96*outpredresid$se)
+lbound = c(lbound, outpredresid$pred[1]-1.96*outpredresid$se)
+model_arimax_pred_model3 [((idx-1)*n_f+1):(idx*n_f)] = outpredresid$pred
+}
+
+############################## measures for all 36 periods
+data_pred = model_arimax_pred_model3 
+data_true = as.matrix(DJ.test)
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+print('--------------')
+############################## measures for pre-pandemic
+data_pred = model_arimax_pred_model3[1:12]
+data_true = as.matrix(DJ.test[1:12])
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+print('--------------')
+############################## measures for post-pandemic
+data_pred =  model_arimax_pred_model3[13:36]
+data_true = as.matrix(DJ.test[13:36])
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+
+```
+
+
+################################ plots
+
+```{r}
+n1 = length(Date)
+n2= length(xts_DJ)
+
+ymin = min(c(DJ[(n2-50):n2]))
+ymax = max(c(DJ[(n2-50):n2]))
+
+plot(Date[(n1-50):n1], DJ[(n2-50):n2],type="l", ylim=c(ymin,ymax), xlab="Time", ylab="DJ Index", main="ARIMAX predictions")
+points(Date[(n1-35):n1],model_arimax_pred_model1,col="red",lwd=2, pch=16)
+points(Date[(n1-35):n1],model_arimax_pred_model2,col="blue",lwd=2, pch=16)
+points(Date[(n1-35):n1],model_arimax_pred_model3,col="green",lwd=2, pch=16)
+legend('topleft', legend=c("Model 1","Model 2", "Model 3"),lty = 2, col=c("red","blue","green"))
+```
+
+
+

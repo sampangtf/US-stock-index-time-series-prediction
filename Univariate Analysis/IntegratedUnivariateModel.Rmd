@@ -1,0 +1,1565 @@
+---
+title: "ISYE 6402 Project Integrated Univariate Analysis"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+```{r setup, include = FALSE}
+
+# Set up the default parameters
+# 1. The code block will be shown in the document
+# 2. set up figure display size
+# 3. turn off all the warnings and messages
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width = 8, fig.height = 4)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+```
+
+## Background
+
+
+
+##Data import and cleaning
+
+```{r}
+## Libraries used within this homework are uploaded here
+
+library(stats)
+library(readxl)
+library(MASS)
+library(lmtest)
+library(scales)
+library(leaps)
+library(zoo,warn.conflicts=FALSE)
+library(lubridate,warn.conflicts=FALSE)
+library(mgcv,warn.conflicts=FALSE)
+library(rugarch,warn.conflicts=FALSE)
+library(readxl)
+library(xts)
+library(neuralnet)
+library(caret)
+library(nlme) 
+```
+
+```{r}
+#importing the data
+data <- read_excel("Data_Template.xlsx")
+data_extra <- read.csv("final.csv", head = TRUE)
+
+#cleaning the data
+
+#dates to date format
+data$Date<-as.Date(data$Date, format='%Y-%m-%d/')
+data = data[order(data$Date), ]
+
+?xts()
+#xts format
+data$SPY <- xts(data$SPY, data$Date)
+data$DJ <- xts(data$DJ, data$Date)
+
+par(mfrow=c(2,1))
+plot(data$SPY, main="S&P 500", ylab="Index")
+plot(data$DJ, main="Dow Jones", ylab=" Index")
+
+par(mfrow=c(2,2))
+acf(data$SPY, main="ACF: S&P 500", ylab="Index")
+acf(data$DJ, main="ACF: Dow Jones", ylab=" Index")
+
+pacf(data$SPY, main="PACF: S&P 500", ylab="Index")
+pacf(data$DJ, main="PACF: Dow Jones", ylab=" Index")
+ 
+```
+
+## Exploratory Data Analysis and Trend Estimation
+
+```{r}
+# time point variables
+time.pts = c(1:length(data$SPY))
+time.pts = c(time.pts - min(time.pts))/max(time.pts)
+start_date = data$Date[order(data$Date)][1]
+start_date_c = c(as.numeric(format(start_date, format="%Y")), 
+                 as.numeric(format(start_date, format="%m")),
+                 as.numeric(format(start_date, format="%d")))
+
+# Spline model
+gam.fit.SP = gam(data$SPY~s(time.pts))
+SP.fitted = ts(fitted(gam.fit.SP),start=start_date_c,frequency=12)
+
+gam.fit.DJ = gam(data$DJ~s(time.pts))
+DJ.fitted = ts(fitted(gam.fit.DJ),start=start_date_c,frequency=12)
+
+# plotting
+
+ts.plot(ts(data$SPY, start=start_date_c,frequency=12) ,ylab="S&P 500", main = "S&P Trend Prediction")
+lines(SP.fitted,lwd=2,col="red", type='l')
+legend("topleft", legend="spline trend estimataion", lwd=2, col="red")
+grid()
+
+ts.plot(ts(data$DJ, start=start_date_c,frequency=12),ylab="Dow Jones", main = "Dow Jones Trend Prediction")
+lines(DJ.fitted,lwd=2,col="red", type='l')
+legend("topleft", legend="spline trend estimataion", lwd=2, col="red")
+grid()
+
+```
+The trends and fluctuations of Dow Jones and S&P are largely the same. There is no observable seasonality so we skip seasonality estimation. 
+
+# Differenced data
+```{r}
+start_date =  data$Date[order(data$Date)][2]
+start_date_c = c(as.numeric(format(start_date, format="%Y")), 
+                 as.numeric(format(start_date, format="%m")),
+                 as.numeric(format(start_date, format="%d")))
+
+diff.SP = ts(diff(data$SPY)[-1], start=start_date_c,frequency=12)
+diff.DJ =  ts(diff(data$DJ)[-1], start=start_date_c,frequency=12)
+
+ts.plot(diff.DJ, col="red", main="Compare differenced data of S&P and DowJones")
+lines(diff.SP, col="blue")
+grid()
+
+ts.plot(diff.SP, col="blue", main="Differenced S&P")
+ts.plot(diff.DJ, col="red", main="Differenced DowJones")
+
+
+par(mfrow=c(2,2))
+acf(data$SPY, main="ACF: Differenced S&P 500", ylab="Index")
+acf(data$DJ, main="ACF: Differenced Dow Jones", ylab=" Index")
+
+pacf(data$SPY, main="PACF: Differenced S&P 500", ylab="Index")
+pacf(data$DJ, main="PACF: Differenced Dow Jones", ylab=" Index")
+
+
+```
+## ARIMA Model
+
+```{r}
+
+n_forward = 36                           ###period forward want to predict
+n = length(data$SPY)
+nfit = n-n_forward                    ###number rows fit to training set
+SPY.train = data$SPY[1:nfit]
+SPY.test = data$SPY[(nfit+1):n]
+
+DJ.train = data$DJ[1:nfit]
+DJ.test = data$DJ[(nfit+1):n]
+
+
+
+
+aicc =function(model){
+  n_ = model$nobs
+  p = length(model$coef)
+  aicc = AIC(model) +2*p*(p+1)/(n_-p-1)
+  return(aicc)
+}
+
+test_modelA <- function(p, d, q, dataset) {
+  mod = arima(dataset, order = c(p, d, q), method = "ML")
+  current.aic = aicc(mod)
+  df = data.frame(p, d, q, current.aic)
+  names(df) <- c("p","d","q","AIC")
+  print(paste(p,d,q,current.aic,sep=" "))
+  return(df)
+}
+
+
+##### S & P Model #####
+orders.SP = data.frame(Inf,Inf,Inf,Inf)
+names(orders.SP) <- c("p","d","q","AIC")
+
+for (p in 0:10) {
+  for (d in 0:2) {
+    for (q in 0:10) {
+      possibleError <- tryCatch(
+        orders.SP <- rbind(orders.SP, test_modelA(p, d, q, dataset=SPY.train)),
+        error = function(e) {e}
+      )
+      if (inherits(possibleError, "error"))
+        next
+    }
+  }
+}
+orders.SP <- orders.SP[order(-orders.SP$AIC), ]
+tail(orders.SP)
+# Order () selected
+porder.sp <- tail(orders.SP, 1)$p
+dorder.sp <- tail(orders.SP, 1)$d
+qorder.sp <- tail(orders.SP, 1)$q
+
+
+##### Dow Jones #####
+orders.DJ = data.frame(Inf,Inf,Inf,Inf)
+names(orders.DJ) <- c("p","d","q","AIC")
+
+for (p in 0:10) {
+  for (d in 0:2) {
+    for (q in 0:10) {
+      possibleError <- tryCatch(
+        orders.DJ <- rbind(orders.DJ, test_modelA(p, d, q, dataset=DJ.train)),
+        error = function(e) {e}
+      )
+      if (inherits(possibleError, "error"))
+        next
+    }
+  }
+}
+orders.DJ <- orders.DJ[order(-orders.DJ$AIC), ]
+tail(orders.DJ)
+# Order () selected
+porder.dj <- tail(orders.DJ, 1)$p
+dorder.dj <- tail(orders.DJ, 1)$d
+qorder.dj <- tail(orders.DJ, 1)$q
+
+
+
+```
+
+
+### Residual Analysis of ARIMA Model
+```{r}
+## Final Model
+mod.SP.1 = arima(SPY.train,order = c(porder.sp, dorder.sp ,qorder.sp), method='ML')
+mod.DJ.1 = arima(DJ.train,order = c(porder.dj, dorder.dj ,qorder.dj), method='ML')
+
+mod.SP.1
+mod.DJ.1
+
+
+### Residual Analysis
+resid.SP <- resid(mod.SP.1)
+resid.DJ <- resid(mod.DJ.1)
+
+### SP ARIMA Residuals
+par (mfrow=c(2,3))
+plot(resid.SP, ylab='Standardized Residuals',type='o',main="Residual Plot" )
+abline(h=0, col='red')
+acf(as.vector(resid.SP), lag.max=12*5, main="ACF: S&P ARIMA Residual")
+pacf(as.vector(resid.SP), lag.max=12*5, main="PACF: S&P ARIMA Residual")
+hist(resid.SP,xlab='Standardized Residuals',main='Histogram: Residuals')
+qqnorm(resid.SP)
+qqline(resid.SP)
+
+
+### DJ ARIMA Residuals
+par (mfrow=c(2,3))
+plot(resid.DJ, ylab='Standardized Residuals',type='o',main="Residual Plot" )
+abline(h=0, col='red')
+acf(as.vector(resid.DJ), lag.max=12*5, main="ACF: DowJon ARIMA Residual")
+pacf(as.vector(resid.DJ), lag.max=12*5, main="PACF: DowJon ARIMA Residual")
+hist(resid.DJ,xlab='Standardized Residuals',main='Histogram: Residuals')
+qqnorm(resid.DJ)
+qqline(resid.DJ)
+
+## hypothesis testing
+
+Box.test(mod.SP.1$resid, lag = (porder.sp+qorder.sp+1), type = "Box-Pierce", fitdf = (porder.sp+qorder.sp))
+Box.test(mod.SP.1$resid, lag = (porder.sp+qorder.sp+1), type = "Ljung-Box", fitdf = (porder.sp+qorder.sp))
+
+Box.test(mod.DJ.1$resid, lag = (porder.dj+qorder.dj+1), type = "Box-Pierce", fitdf = (porder.dj+qorder.dj))
+Box.test(mod.DJ.1$resid, lag = (porder.dj+qorder.dj+1), type = "Ljung-Box", fitdf = (porder.dj+qorder.dj))
+
+
+
+```
+
+The p-values of the ljung-box tests are small and reject the null hypothesis at confidence level of 95%. It is plausible that the residuals are correlated for both ARIMA model fitted into S&P and DowJones.
+
+
+### ARIMA Prediction
+```{r}
+
+# rolling prediction of n=3
+# SPY.train = data$SPY[1:nfit]
+# SPY.test = data$SPY[(nfit+1):n]
+# 
+# DJ.train = data$DJ[1:nfit]
+# DJ.test = data$DJ[(nfit+1):n]
+
+### S&P500
+
+rolling_period = 3
+nfore = length(SPY.test)/rolling_period
+fore.outpred.SP = NULL
+
+for(f in 1: nfore){
+    ## Fit models
+    newdata = SPY.train
+    
+    if(f>2){
+       ###set past data as being the TS observed up to the point at which prediction
+       ###will be made
+       newdata = c(SPY.train, SPY.test[1:((f-1)*rolling_period)])
+    }
+    ## Model ARIMAX
+  
+    model.arima.SP = arima(newdata, order = c(porder.sp, dorder.sp, qorder.sp), method = "ML") 
+    
+    ## Forecast ARIMAX
+    pred.SP = predict(model.arima.SP, n.ahead=rolling_period)
+    fore.outpred.SP = c(fore.outpred.SP, pred.SP$pred)
+    
+}
+n_backward = 40
+
+ymin = min(c(ts(data$SPY[c(n-n_backward+1):n]), fore.outpred.SP))*0.99
+ymax = max(c(ts(data$SPY[c(n-n_backward+1):n]), fore.outpred.SP))*1.01
+
+plot(data$SPY[c(n-n_backward+1):n], type="l",
+         xlab="Time",
+         ylab="S&P 500",
+         main="S&P Prediction Comparison", ylim=c(ymin,ymax), )
+points(xts(fore.outpred.SP, time(SPY.test)), col='blue')
+addLegend("topleft", on=1, 
+          legend.names = c("ARIMA Prediction"), 
+          pch=c(1), 
+          col=c('blue'))
+
+
+### DowJones
+
+rolling_period = 3
+nfore = length(DJ.test)/rolling_period
+fore.outpred.DJ = NULL
+
+for(f in 1: nfore){
+    ## Fit models
+    newdata = DJ.train
+    
+    if(f>2){
+       ###set past data as being the TS observed up to the point at which prediction
+       ###will be made
+       newdata = c(DJ.train, DJ.test[1:((f-1)*rolling_period)])
+    }
+    ## Model ARIMAX
+  
+    model.arima.DJ = arima(newdata, order = c(porder.dj, dorder.dj, qorder.dj), method = "ML") 
+    
+    ## Forecast ARIMAX
+    pred.DJ = predict(model.arima.DJ, n.ahead=rolling_period)
+    fore.outpred.DJ = c(fore.outpred.DJ, pred.DJ$pred)
+    
+}
+n_backward = 40
+
+ymin = min(c(ts(data$DJ[c(n-n_backward+1):n]), fore.outpred.DJ))*0.99
+ymax = max(c(ts(data$DJ[c(n-n_backward+1):n]), fore.outpred.DJ))*1.01
+
+plot(data$DJ[c(n-n_backward+1):n], type="l",
+         xlab="Time",
+         ylab="Dow Jones",
+         main="DJ Prediction Comparison", ylim=c(ymin,ymax), )
+points(xts(fore.outpred.DJ, time(DJ.test)), col='blue')
+addLegend("topleft", on=1, 
+          legend.names = c("ARIMA Prediction"), 
+          pch=c(1), 
+          col=c('blue'))
+
+
+
+```
+
+#### Prediction Evalaution
+```{r}
+
+# ###COMPUTE ACCURACY MEASURES
+
+### S&P 500 ARIMA
+print("Overall: SP")
+obs = SPY.test
+pred = fore.outpred.SP
+
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+print("Overall: DJ")
+### DJ ARIMA
+obs = DJ.test
+pred = fore.outpred.DJ
+
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+
+
+
+#### PRE-COVID vs POST-COVID
+
+### PRE-COVID
+###### S&P
+print("Pre-Covid: SP")
+obs = SPY.test[1:24]
+pred = fore.outpred.SP[1:24]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+###### Dow Jones
+print("Pre-Covid: DJ")
+obs = DJ.test[1:24]
+pred = fore.outpred.DJ[1:24]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+
+
+### POST-COVID
+###### S&P
+print("Post-Covid: SP")
+obs = SPY.test[25:36]
+pred = fore.outpred.SP[25:36]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+###### Dow Jones
+print("Post-Covid: DowJones")
+obs = DJ.test[25:36]
+pred = fore.outpred.DJ[25:36]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+
+```
+
+## SARIMA Model
+### Modelling
+```{r}
+norder=10
+sorder=2
+
+p = c(1:norder)-1; q = c(1:norder)-1
+sp = c(1:norder)-1; sq = c(1:norder)-1
+
+### S&P SARIMA
+test_model.SARIMA.SP <- function(sp, sq) { 
+  mod = arima(SPY.train, order = c(porder.sp, dorder.sp, qorder.sp), seasonal = list(order = c(sp, 1, sq), period =12)) 
+  current.aic = AIC(mod)
+  
+  df = data.frame(0, 2, 1, sp, 1, sq, 12, current.aic) 
+  names(df) <- c("p", "d", "q","P", "D", "Q","S", "AIC")
+  print(paste(0, 2, 1, sp, 1, sq, 12,current.aic, sep=" "))
+  return(df) 
+} 
+ 
+orders.sarima.SP = data.frame(Inf, Inf, Inf, Inf,Inf, Inf, Inf, Inf)
+
+names(orders.sarima.SP) <- c("p", "d", "q", "P", "D", "Q","S", "AIC") 
+
+for (sp in 1:sorder) { 
+  for (sq in 1:sorder) {
+      possibleError <- tryCatch( 
+        orders.sarima.SP <- rbind(orders.sarima.SP, test_model.SARIMA.SP(sp, sq)),
+        error = function(e) {e} 
+      ) 
+      if (inherits(possibleError, "error")) 
+        next 
+  }
+} 
+orders.sarima.SP <- orders.sarima.SP[order(-orders.sarima.SP$AIC), ]
+tail(orders.sarima.SP)
+sPorder.sp = tail(orders.sarima.SP, 1)$P
+sQorder.sp= tail(orders.sarima.SP, 1)$Q
+# (1, 1, 1)
+
+
+### DowJones SARIMA
+
+test_model.SARIMA.DJ <- function(sp, sq) { 
+  mod = arima(DJ.train, order = c(porder.dj, dorder.dj, qorder.dj), seasonal = list(order = c(sp, 1, sq), period =12)) 
+  current.aic = AIC(mod)
+  
+  df = data.frame(0, 2, 1, sp, 1, sq, 12, current.aic) 
+  names(df) <- c("p", "d", "q","P", "D", "Q","S", "AIC")
+  print(paste(0, 2, 1, sp, 1, sq, 12,current.aic, sep=" "))
+  return(df) 
+} 
+ 
+orders.sarima.DJ = data.frame(Inf, Inf, Inf, Inf,Inf, Inf, Inf, Inf)
+
+names(orders.sarima.DJ) <- c("p", "d", "q", "P", "D", "Q","S", "AIC") 
+
+for (sp in 1:sorder) { 
+  for (sq in 1:sorder) {
+      possibleError <- tryCatch( 
+        orders.sarima.DJ <- rbind(orders.sarima.DJ, test_model.SARIMA.DJ(sp, sq)),
+        error = function(e) {e} 
+      ) 
+      if (inherits(possibleError, "error")) 
+        next 
+  }
+} 
+orders.sarima.DJ <- orders.sarima.DJ[order(-orders.sarima.DJ$AIC), ]
+tail(orders.sarima.DJ)
+sPorder.dj = tail(orders.sarima.DJ, 1)$P
+sQorder.dj= tail(orders.sarima.DJ, 1)$Q
+# (1, 1, 2)
+
+
+```
+
+
+### Residual Analysis
+```{r}
+## Final Model
+mod.sarima.SP.1 = arima(SPY.train, order = c(porder.sp, dorder.sp ,qorder.sp), 
+                        method='ML', 
+                        seasonal=list(order = c(sPorder.sp, 1, sQorder.sp), period =12))
+mod.sarima.DJ.1 = arima(DJ.train, order = c(porder.dj, dorder.dj ,qorder.dj), 
+                         method='ML',
+                         seasonal=list(order = c(sPorder.dj, 1, sQorder.dj), period =12))
+
+mod.sarima.SP.1
+mod.sarima.DJ.1
+
+
+### Residual Analysis
+resid.SP <- resid(mod.sarima.SP.1)
+resid.DJ <- resid(mod.sarima.DJ.1)
+
+### SP ARIMA Residuals
+par (mfrow=c(2,3))
+plot(resid.SP, ylab='Standardized Residuals',type='o',main="SARIMA Residual Plot" )
+abline(h=0, col='red')
+acf(as.vector(resid.SP), lag.max=12*5, main="ACF: S&P SARIMA Residual")
+pacf(as.vector(resid.SP), lag.max=12*5, main="PACF: S&P SARIMA Residual")
+hist(resid.SP,xlab='Standardized Residuals',main='Histogram: Residuals')
+qqnorm(resid.SP)
+qqline(resid.SP)
+
+
+### DJ ARIMA Residuals
+par (mfrow=c(2,3))
+plot(resid.DJ, ylab='Standardized Residuals',type='o',main="SARIMA Residual Plot" )
+abline(h=0, col='red')
+acf(as.vector(resid.DJ), lag.max=12*5, main="ACF: DowJon SARIMA Residual")
+pacf(as.vector(resid.DJ), lag.max=12*5, main="PACF: DowJon SARIMA Residual")
+hist(resid.DJ,xlab='Standardized Residuals',main='Histogram: Residuals')
+qqnorm(resid.DJ)
+qqline(resid.DJ)
+
+## hypothesis testing
+
+Box.test(resid.SP, lag = (porder.sp+qorder.sp+1), type = "Box-Pierce", fitdf = (porder.sp+qorder.sp))
+Box.test(resid.SP, lag = (porder.sp+qorder.sp+1), type = "Ljung-Box", fitdf = (porder.sp+qorder.sp))
+
+Box.test(resid.DJ, lag = (porder.dj+qorder.dj+1), type = "Box-Pierce", fitdf = (porder.dj+qorder.dj))
+Box.test(resid.DJ, lag = (porder.dj+qorder.dj+1), type = "Ljung-Box", fitdf = (porder.dj+qorder.dj))
+
+```
+
+
+
+### Prediction
+```{r}
+rolling_period = 3
+nfore = length(SPY.test)/rolling_period
+fore.outpred.SP.sarima = NULL
+
+# mod.sarima.SP.1 = arima(SPY.train, order = c(porder.sp, dorder.sp ,qorder.sp), 
+#                         method='ML', 
+#                         seasonal=list(order = c(sPorder.sp, 1, sQorder.sp), period =12))
+# mod.sarima.DJ.1 = arima(DJ.train, order = c(porder.dj, dorder.dj ,qorder.dj), 
+#                          method='ML',
+#                          seasonal=list(order = c(sPorder.dj, 1, sQorder.dj), period =12))
+
+for(f in 1: nfore){
+    ## Fit models
+    newdata = SPY.train
+    
+    if(f>2){
+       ###set past data as being the TS observed up to the point at which prediction
+       ###will be made
+       newdata = c(SPY.train, SPY.test[1:((f-1)*rolling_period)])
+    }
+    ## Model ARIMAX
+  
+    model.sarima.SP = arima(newdata, order = c(porder.sp, dorder.sp, qorder.sp), method = "ML", 
+                            seasonal=list(order = c(sPorder.sp, 1, sQorder.sp), period =12)) 
+    
+    ## Forecast ARIMAX
+    pred.SP = predict(model.sarima.SP, n.ahead=rolling_period)
+    fore.outpred.SP.sarima = c(fore.outpred.SP.sarima, pred.SP$pred)
+    
+}
+n_backward = 40
+
+ymin = min(c(ts(data$SPY[c(n-n_backward+1):n]), fore.outpred.SP.sarima))*0.99
+ymax = max(c(ts(data$SPY[c(n-n_backward+1):n]), fore.outpred.SP.sarima))*1.01
+
+plot(data$SPY[c(n-n_backward+1):n], type="l",
+         xlab="Time",
+         ylab="S&P 500",
+         main="S&P Prediction Comparison", ylim=c(ymin,ymax), )
+points(xts(fore.outpred.SP.sarima, time(SPY.test)), col='blue')
+addLegend("topleft", on=1, 
+          legend.names = c("ARIMA Prediction"), 
+          pch=c(1), 
+          col=c('blue'))
+
+
+### DowJones
+
+rolling_period = 3
+nfore = length(DJ.test)/rolling_period
+fore.outpred.DJ.sarima = NULL
+
+for(f in 1: nfore){
+    ## Fit models
+    newdata = DJ.train
+    
+    if(f>2){
+       ###set past data as being the TS observed up to the point at which prediction
+       ###will be made
+       newdata = c(DJ.train, DJ.test[1:((f-1)*rolling_period)])
+    }
+    ## Model ARIMAX
+  
+    model.sarima.DJ = arima(newdata, order = c(porder.dj, dorder.dj, qorder.dj), method = "ML",
+                            seasonal=list(order = c(sPorder.dj, 1, sQorder.dj), period =12)) 
+    
+    ## Forecast ARIMAX
+    pred.DJ = predict(model.sarima.DJ, n.ahead=rolling_period)
+    fore.outpred.DJ.sarima = c(fore.outpred.DJ.sarima, pred.DJ$pred)
+    
+}
+n_backward = 40
+
+ymin = min(c(ts(data$DJ[c(n-n_backward+1):n]), fore.outpred.DJ.sarima))*0.99
+ymax = max(c(ts(data$DJ[c(n-n_backward+1):n]), fore.outpred.DJ.sarima))*1.01
+
+plot(data$DJ[c(n-n_backward+1):n], type="l",
+         xlab="Time",
+         ylab="Dow Jones",
+         main="DJ Prediction Comparison", ylim=c(ymin,ymax), )
+points(xts(fore.outpred.DJ.sarima, time(DJ.test)), col='blue')
+addLegend("topleft", on=1, 
+          legend.names = c("ARIMA Prediction"), 
+          pch=c(1), 
+          col=c('blue'))
+
+
+
+
+```
+
+### Prediction Evalaution
+```{r}
+
+
+# ###COMPUTE ACCURACY MEASURES
+
+### S&P 500 ARIMA
+print("Overall: SP")
+obs = SPY.test
+pred = fore.outpred.SP.sarima
+
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+print("Overall: DJ")
+### DJ ARIMA
+obs = DJ.test
+pred = fore.outpred.DJ.sarima
+
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+
+
+
+#### PRE-COVID vs POST-COVID
+
+### PRE-COVID
+###### S&P
+print("Pre-Covid: SP")
+obs = SPY.test[1:24]
+pred = fore.outpred.SP.sarima[1:24]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+###### Dow Jones
+print("Pre-Covid: DJ")
+obs = DJ.test[1:24]
+pred = fore.outpred.DJ.sarima[1:24]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+
+
+### POST-COVID
+###### S&P
+print("Post-Covid: SP")
+obs = SPY.test[25:36]
+pred = fore.outpred.SP.sarima[25:36]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+###### Dow Jones
+print("Post-Covid: DowJones")
+obs = DJ.test[25:36]
+pred = fore.outpred.DJ.sarima[25:36]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+```
+
+
+
+## ARMA-GARCH Model
+### S&P500 Modelling
+
+#### GARCH Modelling
+```{r}
+
+
+n_forward = 36  
+n.diff = length(data$SPY)
+nfit.diff = n.diff-n_forward                    ###number rows fit to training set
+diff.SP.train = diff.SP[1:nfit.diff]
+diff.SP.test = diff.SP[(nfit.diff+1):n]
+
+diff.DJ.train = diff.DJ[1:nfit.diff]
+diff.DJ.test = diff.DJ[(nfit.diff+1):n]
+
+
+### S&P ARMA-GARCH
+
+# Step 1: Initial ARMA orders
+test_modelA1 <- function(p, d, q, dataset) {
+  mod = arima(dataset, order = c(p, d, q), method = "ML") 
+  current.aic = AIC(mod)    
+  df = data.frame(p, d, q, current.aic)
+  names(df) <- c("p", "d", "q", "AIC") 
+  print(paste(p,d,q,current.aic,sep=" "))
+  return(df)
+}
+
+ordersARIMA = data.frame(Inf, Inf, Inf, Inf)
+names(ordersARIMA) <- c("p", "d", "q", "AIC")
+for (p in 0:8) { 
+  for (d in 0:0) {
+    for (q in 0:8) { 
+      possibleError <- tryCatch(
+            ordersARIMA <- rbind(ordersARIMA, test_modelA1(p, d, q, dataset=diff.SP.train)),
+            error = function(e) {e}
+      )
+      if (inherits(possibleError, "error")) 
+        next
+    } 
+  }
+}
+ordersARIMA <- ordersARIMA[order(-ordersARIMA$AIC), ]
+tail(ordersARIMA)
+
+### ARIMA Initial Orders -> (0, 1, 0) is chosen
+porder = tail(ordersARIMA, n=1)$p
+qorder = tail(ordersARIMA, n=1)$q
+
+# 
+
+# Step 2: Initial GARCH Order
+#ARIMA-GARCH: Select GARCH order
+test_modelAGG <- function(m,n, dataset){
+    spec = ugarchspec(variance.model=list(garchOrder=c(m,n)),
+                      mean.model=list(armaOrder=c(porder,qorder),
+                                      include.mean=T),
+                      distribution.model="std")
+    fit = ugarchfit(spec, dataset, solver = 'hybrid')
+    current.bic = infocriteria(fit)[2]
+    df = data.frame(m,n,current.bic)
+    names(df) <- c("m","n","BIC")
+    print(paste(m,n,current.bic,sep=" "))
+    return(df)
+}
+
+ordersAGG = data.frame(Inf,Inf,Inf)
+names(ordersAGG) <- c("m","n","BIC")
+
+for (m in 0:3){
+    for (n in 0:3){
+        possibleError <- tryCatch(
+            ordersAGG<-rbind(ordersAGG,test_modelAGG(m,n, dataset=diff.SP.train)),
+            error=function(e) e
+        )
+        if(inherits(possibleError, "error")) next
+    }
+}
+ordersAGG <- ordersAGG[order(-ordersAGG$BIC),]
+tail(ordersAGG)
+# 1,1
+
+### GARCH Initial Orders -> (1, 1) is chosen
+morder = tail(ordersAGG, n=1)$m
+norder = tail(ordersAGG, n=1)$n
+
+#Step 3: ARMA order update
+#ARIMA-GARCH: Select ARIMA order
+test_modelAGA <- function(p,q, dataset){
+    spec = ugarchspec(variance.model=list(garchOrder=c(morder,norder)),
+                      mean.model=list(armaOrder=c(p,q),
+                                      include.mean=T),
+                      distribution.model="std")
+    fit = ugarchfit(spec, dataset, solver = 'hybrid')
+    current.bic = infocriteria(fit)[2]
+    df = data.frame(p,q,current.bic)
+    names(df) <- c("p","q","BIC")
+    print(paste(p,q,current.bic,sep=" "))
+    return(df)
+}
+
+ordersAGA = data.frame(Inf,Inf,Inf)
+names(ordersAGA) <- c("p","q","BIC")
+for (p in 0:6){
+    for (q in 0:6){
+        possibleError <- tryCatch(
+            ordersAGA<-rbind(ordersAGA,test_modelAGA(p,q, dataset=diff.SP.train)),
+            error=function(e) e
+        )
+        if(inherits(possibleError, "error")) next
+    }
+}
+ordersAGA <- ordersAGA[order(-ordersAGA$BIC),]
+tail(ordersAGA)
+#3,3
+#### (0, 1) is preferred to (1, 0).
+porder = tail(ordersAGA, n=1)$p
+qorder = tail(ordersAGA, n=1)$q
+
+
+# Step 4: GARCH order update
+test_modelAGG <- function(m,n, dataset){
+    spec = ugarchspec(variance.model=list(garchOrder=c(m,n)),
+                      mean.model=list(armaOrder=c(porder,qorder),
+                                      include.mean=T), distribution.model="std")
+    fit = ugarchfit(spec, dataset, solver = 'hybrid')
+    current.bic = infocriteria(fit)[2]
+    df = data.frame(m,n,current.bic)
+    names(df) <- c("m","n","BIC")
+    print(paste(m,n,current.bic,sep=" "))
+    return(df)
+}
+
+ordersAGG = data.frame(Inf,Inf,Inf)
+names(ordersAGG) <- c("m","n","BIC")
+
+for (m in 0:3){
+    for (n in 0:3){
+        possibleError <- tryCatch(
+            ordersAGG<-rbind(ordersAGG,test_modelAGG(m,n, dataset=diff.SP.train)),
+            error=function(e) e
+        )
+        if(inherits(possibleError, "error")) next
+    }
+}
+ordersAGG <- ordersAGG[order(-ordersAGG$BIC),]
+tail(ordersAGG)
+
+#### Final ARMA(3, 3)+GARCH(1,1) selected 
+morder = tail(ordersAGG, n=1)$m
+norder = tail(ordersAGG, n=1)$n
+
+### Final Order Selection
+# porder = 3
+# qorder = 3
+# morder = 1
+# norder = 1
+
+
+
+```
+
+#### GARCH Residual Analysis
+```{r}
+# Building Final Model
+spec.SP = ugarchspec(variance.model=list(garchOrder=c(morder, norder)),
+                 mean.model=list(armaOrder=c(porder, qorder),
+                 include.mean=T), distribution.model="std")
+final.model.SP = ugarchfit(spec.SP, diff.SP.train, solver = 'hybrid')
+
+
+## compare Information Criteria
+infocriteria(final.model.SP)
+
+## Residual Analysis
+par (mfrow=c(2,2))
+resids.final.model = residuals(final.model.SP)
+acf(resids.final.model,main="ACF of ARCH Residuals")
+acf(resids.final.model^2,main="ACF of Squared ARCH Residuals")
+Box.test(resids.final.model,lag=10,type='Ljung')
+Box.test(resids.final.model^2,lag=10,type='Ljung')
+qqnorm(resids.final.model)
+```
+#### eGARCH Residual Analysis
+```{r}
+
+# Building Final Model
+spec.SP.egarch = ugarchspec(variance.model=list(model = "eGARCH",garchOrder=c(morder, norder)),
+                    mean.model=list(armaOrder=c(porder, qorder),include.mean=T), 
+                    distribution.model="std")
+final.model.SP.egarch = ugarchfit(spec.SP.egarch, diff.SP.train, solver = 'hybrid')
+
+
+## compare Information Criteria
+infocriteria(final.model.SP.egarch)
+
+## Residual Analysis
+par (mfrow=c(2,2))
+resids.final.model = residuals(final.model.SP.egarch)
+acf(resids.final.model,main="ACF of ARCH Residuals")
+acf(resids.final.model^2,main="ACF of Squared ARCH Residuals")
+Box.test(resids.final.model,lag=10,type='Ljung')
+Box.test(resids.final.model^2,lag=10,type='Ljung')
+qqnorm(resids.final.model)
+
+```
+
+
+### DowJones 
+#### GARCH MODELLING
+```{r}
+### DowJones
+
+# Step 1: Initial ARMA orders
+
+ordersARIMA = data.frame(Inf, Inf, Inf, Inf)
+names(ordersARIMA) <- c("p", "d", "q", "AIC")
+for (p in 0:8) { 
+  for (d in 0:0) {
+    for (q in 0:8) { 
+      possibleError <- tryCatch(
+            ordersARIMA <- rbind(ordersARIMA, test_modelA1(p, d, q, dataset=diff.DJ.train)),
+            error = function(e) {e}
+      )
+      if (inherits(possibleError, "error")) 
+        next
+    } 
+  }
+}
+ordersARIMA <- ordersARIMA[order(-ordersARIMA$AIC), ]
+tail(ordersARIMA)
+
+### ARIMA Initial Orders -> (2, 1, 2) is chosen
+porder = tail(ordersARIMA, n=1)$p
+qorder = tail(ordersARIMA, n=1)$q
+
+# 
+
+# Step 2: Initial GARCH Order
+#ARIMA-GARCH: Select GARCH order
+ordersAGG = data.frame(Inf,Inf,Inf)
+names(ordersAGG) <- c("m","n","BIC")
+
+for (m in 0:3){
+    for (n in 0:3){
+        possibleError <- tryCatch(
+            ordersAGG<-rbind(ordersAGG,test_modelAGG(m,n, dataset=diff.DJ.train)),
+            error=function(e) e
+        )
+        if(inherits(possibleError, "error")) next
+    }
+}
+ordersAGG <- ordersAGG[order(-ordersAGG$BIC),]
+tail(ordersAGG)
+# 1,1
+
+### GARCH Initial Orders -> (1, 1) is chosen
+morder = tail(ordersAGG, n=1)$m
+norder = tail(ordersAGG, n=1)$n
+
+#Step 3: ARMA order update
+#ARIMA-GARCH: Select ARIMA order
+ordersAGA = data.frame(Inf,Inf,Inf)
+names(ordersAGA) <- c("p","q","BIC")
+for (p in 0:8){
+    for (q in 0:8){
+        possibleError <- tryCatch(
+            ordersAGA<-rbind(ordersAGA,test_modelAGA(p,q, dataset=diff.DJ.train)),
+            error=function(e) e
+        )
+        if(inherits(possibleError, "error")) next
+    }
+}
+ordersAGA <- ordersAGA[order(-ordersAGA$BIC),]
+tail(ordersAGA)
+#1,0
+porder = tail(ordersAGA, n=1)$p
+qorder = tail(ordersAGA, n=1)$q
+
+
+# Step 4: GARCH order update
+ordersAGG = data.frame(Inf,Inf,Inf)
+names(ordersAGG) <- c("m","n","BIC")
+
+for (m in 0:3){
+    for (n in 0:3){
+        possibleError <- tryCatch(
+            ordersAGG<-rbind(ordersAGG,test_modelAGG(m,n, dataset=diff.DJ.train)),
+            error=function(e) e
+        )
+        if(inherits(possibleError, "error")) next
+    }
+}
+ordersAGG <- ordersAGG[order(-ordersAGG$BIC),]
+tail(ordersAGG)
+
+#### Final ARMA(1, 0)+GARCH(1,1) selected 
+morder = tail(ordersAGG, n=1)$m
+norder = tail(ordersAGG, n=1)$n
+
+### Final Order Selection
+# morder = 1
+# norder = 1
+# porder = 1
+# qorder = 0
+
+
+```
+
+
+
+#### GARCH Residual Analysis
+```{r}
+
+# Building Final Model
+spec.DJ = ugarchspec(variance.model=list(garchOrder=c(morder, norder)),
+                 mean.model=list(armaOrder=c(porder, qorder),
+                 include.mean=T), distribution.model="std")
+final.model.DJ = ugarchfit(spec.DJ, diff.DJ.train, solver = 'hybrid')
+
+## compare Information Criteria
+infocriteria(final.model.DJ)
+
+## Residual Analysis
+par (mfrow=c(2,2))
+resids.final.model = residuals(final.model.DJ)
+acf(resids.final.model,main="ACF of ARCH Residuals")
+acf(resids.final.model^2,main="ACF of Squared ARCH Residuals")
+Box.test(resids.final.model,lag=10,type='Ljung')
+Box.test(resids.final.model^2,lag=10,type='Ljung')
+qqnorm(resids.final.model)
+
+```
+#### eGARCH Residual Analysis
+```{r}
+# Building Final Model
+spec.DJ.egarch = ugarchspec(variance.model=list(model = "eGARCH",garchOrder=c(morder, norder)),
+                    mean.model=list(armaOrder=c(porder, qorder),include.mean=T), distribution.model="std")
+  
+final.model.DJ.egarch = ugarchfit(spec.DJ.egarch, diff.DJ.train, solver = 'hybrid')
+
+## compare Information Criteria
+infocriteria(final.model.DJ.egarch)
+
+## Residual Analysis
+par (mfrow=c(2,2))
+resids.final.model = residuals(final.model.DJ.egarch)
+acf(resids.final.model,main="ACF of ARCH Residuals")
+acf(resids.final.model^2,main="ACF of Squared ARCH Residuals")
+Box.test(resids.final.model,lag=10,type='Ljung')
+Box.test(resids.final.model^2,lag=10,type='Ljung')
+qqnorm(resids.final.model)
+
+```
+
+
+### ARMA-GARCH Prediction
+```{r}
+n = nrow(diff.SP)
+rolling_period = 3
+nfore = length(SPY.test)/rolling_period
+
+#### S&P 500 ####
+fore.series.SP = NULL
+fore.sigma.SP = NULL
+for(f in 1: nfore){
+    ## Fit models
+    newdata = diff.SP.train
+    if(f>2)
+       ###set past data as being the TS observed up to the point at which prediction
+       ###will be made
+       newdata = c(diff.SP.train, diff.SP.test[1:((f-1)*rolling_period)])
+    pred.model.SP = ugarchfit(spec.SP, newdata, solver = 'hybrid')
+    
+    ## Forecast
+    fore = ugarchforecast(pred.model.SP, n.ahead=rolling_period)
+    fore.series.SP = c(fore.series.SP, fore@forecast$seriesFor)
+    fore.sigma.SP = c(fore.sigma.SP, fore@forecast$sigmaFor)
+}
+
+
+# n_forward = 36  
+# n.diff = length(data$SPY)
+# nfit.diff = n.diff-n_forward                    ###number rows fit to training set
+# diff.SP.train = diff.SP[1:nfit.diff]
+# diff.SP.test = diff.SP[(nfit.diff+1):n]
+# 
+# diff.DJ.train = diff.DJ[1:nfit.diff]
+# diff.DJ.test = diff.DJ[(nfit.diff+1):n]
+# diffinv(diff.SP, xi=SPY.train[1])
+
+inv.fore.series.SP = diffinv(fore.series.SP, xi=SPY.train[nrow(SPY.train)])[-1]
+
+n_backward = 40
+
+ymin = min(c(ts(data$SPY[c(n-n_backward+1):n]), inv.fore.series.SP))*0.99
+ymax = max(c(ts(data$SPY[c(n-n_backward+1):n]), inv.fore.series.SP))*1.01
+
+plot(data$SPY[c(n-n_backward+1):n], type="l",
+         xlab="Time",
+         ylab="S&P 500",
+         main="S&P Prediction Comparison", ylim=c(ymin,ymax), )
+points(xts(inv.fore.series.SP, time(SPY.test)), col='blue')
+addLegend("topleft", on=1, 
+          legend.names = c("ARMA-GARCH Prediction"), 
+          pch=c(1), 
+          col=c('blue'))
+
+#### DowJones ####
+rolling_period = 3
+nfore = length(SPY.test)/rolling_period
+
+fore.series.DJ = NULL
+fore.sigma.DJ = NULL
+for(f in 1: nfore){
+    ## Fit models
+    newdata = diff.DJ.train
+    if(f>2)
+       ###set past data as being the TS observed up to the point at which prediction
+       ###will be made
+       newdata = c(diff.DJ.train, diff.DJ.test[1:((f-1)*rolling_period)])
+    pred.model.DJ = ugarchfit(spec.DJ, newdata, solver = 'hybrid')
+    
+    ## Forecast
+    fore = ugarchforecast(pred.model.DJ, n.ahead=rolling_period)
+    fore.series.DJ = c(fore.series.DJ, fore@forecast$seriesFor)
+    fore.sigma.DJ = c(fore.sigma.DJ, fore@forecast$sigmaFor)
+}
+
+inv.fore.series.DJ = diffinv(fore.series.DJ, xi=DJ.train[nrow(DJ.train)])[-1]
+
+
+n_backward = 40
+
+ymin = min(c(ts(data$DJ[c(n-n_backward+1):n]), inv.fore.series.DJ))*0.99
+ymax = max(c(ts(data$DJ[c(n-n_backward+1):n]), inv.fore.series.DJ))*1.01
+
+plot(data$DJ[c(n-n_backward+1):n], type="l",
+         xlab="Time",
+         ylab="Dow Jones",
+         main="Dow Jones Prediction Comparison", ylim=c(ymin,ymax), )
+points(xts(inv.fore.series.DJ, time(DJ.test)), col='blue')
+addLegend("topleft", on=1, 
+          legend.names = c("ARMA-GARCH Prediction"), 
+          pch=c(1), 
+          col=c('blue'))
+
+
+
+```
+
+#### ARMA-GARCH Prediction Evalaution
+```{r}
+
+# ###COMPUTE ACCURACY MEASURES
+
+### S&P 500 ARIMA
+print("Overall: SP")
+obs = SPY.test
+pred = inv.fore.series.SP
+
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+print("Overall: DJ")
+### DJ ARIMA
+obs = DJ.test
+pred = inv.fore.series.DJ
+
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+
+
+
+#### PRE-COVID vs POST-COVID
+
+### PRE-COVID
+###### S&P
+print("Pre-Covid: SP")
+obs = SPY.test[1:24]
+pred = inv.fore.series.SP[1:24]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+###### Dow Jones
+print("Pre-Covid: DJ")
+obs = DJ.test[1:24]
+pred = inv.fore.series.DJ[1:24]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+
+
+### POST-COVID
+###### S&P
+print("Post-Covid: SP")
+obs = SPY.test[25:36]
+pred = inv.fore.series.SP[25:36]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+###### Dow Jones
+print("Post-Covid: DowJones")
+obs = DJ.test[25:36]
+pred = inv.fore.series.DJ[25:36]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+```
+
+### eGARCH Prediction
+### ARMA-GARCH Prediction
+```{r}
+
+n_forward = 36  
+n.diff = length(data$SPY)
+nfit.diff = n.diff-n_forward                    ###number rows fit to training set
+diff.SP.train = diff.SP[1:nfit.diff]
+diff.SP.test = diff.SP[(nfit.diff+1):n]
+
+diff.DJ.train = diff.DJ[1:nfit.diff]
+diff.DJ.test = diff.DJ[(nfit.diff+1):n]
+
+
+n = nrow(diff.SP)
+rolling_period = 3
+nfore = length(SPY.test)/rolling_period
+
+
+
+#### S&P 500 ####
+fore.series.SP.egarch = NULL
+fore.sigma.SP.egarch = NULL
+for(f in 1: nfore){
+    ## Fit models
+    newdata = diff.SP.train
+    if(f>2)
+       ###set past data as being the TS observed up to the point at which prediction
+       ###will be made
+       newdata = c(diff.SP.train, diff.SP.test[1:((f-1)*rolling_period)])
+    pred.model.SP = ugarchfit(spec.SP.egarch, newdata, solver = 'hybrid')
+    
+    ## Forecast
+    fore = ugarchforecast(pred.model.SP, n.ahead=rolling_period)
+    fore.series.SP.egarch = c(fore.series.SP.egarch, fore@forecast$seriesFor)
+    fore.sigma.SP.egarch = c(fore.sigma.SP.egarch, fore@forecast$sigmaFor)
+}
+
+inv.fore.series.SP.egarch = diffinv(fore.series.SP.egarch, xi=SPY.train[nrow(SPY.train)])[-1]
+
+n_backward = 40
+
+ymin = min(c(ts(data$SPY[c(n-n_backward+1):n]), inv.fore.series.SP.egarch))*0.99
+ymax = max(c(ts(data$SPY[c(n-n_backward+1):n]), inv.fore.series.SP.egarch))*1.01
+
+plot(data$SPY[c(n-n_backward+1):n], type="l",
+         xlab="Time",
+         ylab="S&P 500",
+         main="S&P Prediction Comparison", ylim=c(ymin,ymax), )
+points(xts(inv.fore.series.SP.egarch, time(SPY.test)), col='blue')
+addLegend("topleft", on=1, 
+          legend.names = c("eGARCH Prediction"), 
+          pch=c(1), 
+          col=c('blue'))
+
+#### DowJones ####
+rolling_period = 3
+nfore = length(SPY.test)/rolling_period
+
+fore.series.DJ.egarch = NULL
+fore.sigma.DJ.egarch = NULL
+for(f in 1: nfore){
+    ## Fit models
+    newdata = diff.DJ.train
+    if(f>2)
+       ###set past data as being the TS observed up to the point at which prediction
+       ###will be made
+       newdata = c(diff.DJ.train, diff.DJ.test[1:((f-1)*rolling_period)])
+    pred.model.DJ = ugarchfit(spec.DJ.egarch, newdata, solver = 'hybrid')
+    
+    ## Forecast
+    fore = ugarchforecast(pred.model.DJ, n.ahead=rolling_period)
+    fore.series.DJ.egarch = c(fore.series.DJ.egarch, fore@forecast$seriesFor)
+    fore.sigma.DJ.egarch = c(fore.sigma.DJ.egarch, fore@forecast$sigmaFor)
+}
+
+inv.fore.series.DJ.egarch = diffinv(fore.series.DJ.egarch, xi=DJ.train[nrow(DJ.train)])[-1]
+
+
+n_backward = 40
+
+ymin = min(c(ts(data$DJ[c(n-n_backward+1):n]), inv.fore.series.DJ.egarch))*0.99
+ymax = max(c(ts(data$DJ[c(n-n_backward+1):n]), inv.fore.series.DJ.egarch))*1.01
+
+plot(data$DJ[c(n-n_backward+1):n], type="l",
+         xlab="Time",
+         ylab="Dow Jones",
+         main="Dow Jones Prediction Comparison", ylim=c(ymin,ymax), )
+points(xts(inv.fore.series.DJ.egarch, time(DJ.test)), col='blue')
+addLegend("topleft", on=1, 
+          legend.names = c("eGARCH Prediction"), 
+          pch=c(1), 
+          col=c('blue'))
+
+
+
+
+```
+
+#### Prediction Evaluation
+```{r}
+
+# ###COMPUTE ACCURACY MEASURES
+
+### S&P 500 ARIMA
+print("Overall: SP")
+obs = SPY.test
+pred = inv.fore.series.SP.egarch
+
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+print("Overall: DJ")
+### DJ ARIMA
+obs = DJ.test
+pred = inv.fore.series.DJ.egarch
+
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+
+
+
+#### PRE-COVID vs POST-COVID
+
+### PRE-COVID
+###### S&P
+print("Pre-Covid: SP")
+obs = SPY.test[1:24]
+pred = inv.fore.series.SP.egarch[1:24]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+###### Dow Jones
+print("Pre-Covid: DJ")
+obs = DJ.test[1:24]
+pred = inv.fore.series.DJ.egarch[1:24]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+
+
+### POST-COVID
+###### S&P
+print("Post-Covid: SP")
+obs = SPY.test[25:36]
+pred = inv.fore.series.SP.egarch[25:36]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+###### Dow Jones
+print("Post-Covid: DowJones")
+obs = DJ.test[25:36]
+pred = inv.fore.series.DJ.egarch[25:36]
+### Mean Squared Prediction Error (MSPE)
+mean((pred-obs)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(pred-obs))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(pred-obs)/obs)
+### Precision Measure (PM)
+sum((pred-obs)^2)/sum((obs-mean(obs))^2)
+
+```
+
+## Final Comparsion of Prediction
+```{r}
+ymin = min(c(ts(data$SPY[c(n-n_backward+1):n]), inv.fore.series.SP.egarch))*0.99
+ymax = max(c(ts(data$SPY[c(n-n_backward+1):n]), inv.fore.series.SP.egarch))*1.01
+
+plot(data$SPY[c(n-n_backward+1):n], type="l",
+         xlab="Time",
+         ylab="S&P 500",
+         main="S&P Prediction Comparison", ylim=c(ymin,ymax), )
+points(xts(fore.outpred.SP, time(SPY.test)), col='blue')
+points(xts(fore.outpred.SP.sarima, time(SPY.test)), col='red')
+points(xts(inv.fore.series.SP, time(SPY.test)), col='green')
+points(xts(inv.fore.series.SP.egarch, time(SPY.test)), col='purple')
+
+addLegend("topleft", on=1, 
+          legend.names = c("ARIMA", "sARIMA","ARMA-GARCH", "eGARCH"), 
+          pch=c(1), 
+          col=c('blue', 'red', 'green', 'purple'))
+
+n_backward = 40
+
+ymin = min(c(ts(data$DJ[c(n-n_backward+1):n]), inv.fore.series.DJ.egarch))*0.99
+ymax = max(c(ts(data$DJ[c(n-n_backward+1):n]), inv.fore.series.DJ.egarch))*1.01
+
+plot(data$DJ[c(n-n_backward+1):n], type="l",
+         xlab="Time",
+         ylab="Dow Jones",
+         main="Dow Jones Prediction Comparison", ylim=c(ymin,ymax), )
+points(xts(fore.outpred.DJ, time(DJ.test)), col='blue')
+points(xts(fore.outpred.DJ.sarima, time(DJ.test)), col='red')
+points(xts(inv.fore.series.DJ, time(DJ.test)), col='green')
+points(xts(inv.fore.series.DJ.egarch, time(DJ.test)), col='purple')
+
+addLegend("topleft", on=1, 
+          legend.names = c("ARIMA", "sARIMA","ARMA-GARCH", "eGARCH"), 
+          pch=c(1), 
+          col=c('blue', 'red', 'green', 'purple'))
+
+
+```
+
+

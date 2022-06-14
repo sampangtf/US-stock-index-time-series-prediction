@@ -1,0 +1,185 @@
+---
+title: "project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r library}
+library(zoo,warn.conflicts=FALSE)
+library(lubridate,warn.conflicts=FALSE)
+library(mgcv,warn.conflicts=FALSE)
+library(rugarch,warn.conflicts=FALSE)
+library(xts)
+```
+
+**Monthly Data Import and Processing**
+```{r Read Montly Data}
+data <- read.csv("Data_Template_prophet.csv", head = TRUE)
+data$Date<-as.Date(data$ï..ds, format='%Y-%m-%d')
+data = data[order(data$Date), ]
+```
+
+```{r plots for main data}
+SPY <- ts(data[,2], start=c(1992,1,31),frequency=12)
+DJ <- ts(data[,3], start=c(1992,1,31),frequency=12)
+ts.plot(SPY, main="SPY", ylab="index value")
+ts.plot(DJ, main="DJ", ylab="index value")
+```
+
+```{r prophet pre-covid}
+df_SPY = data[,1:2]
+colnames(df_SPY) <- c('ds','y')
+
+df_DJ = data.frame(data[,1], data[,3])
+colnames(df_DJ) <- c('ds','y')
+
+n = nrow(df_SPY)
+
+n_ahead = 36
+
+n_train = n - n_ahead
+
+df_SPY_train = df_SPY[1:n_train,]
+df_SPY_test= df_SPY[(n_train+1):n,]
+
+df_DJ_train = df_DJ[1:n_train,]
+df_DJ_test = df_DJ[(n_train+1):n,]
+
+```
+
+
+######################## SPY ######################
+##### Univariate
+
+```{r predict SPY}
+library(prophet)
+
+m1 <- prophet(df_SPY_train,changepoint.prior.scale = 0.3)
+
+future_SPY <- make_future_dataframe(m1, periods = n_ahead, freq = 'month')
+
+forecast_SPY <- predict(m1, future_SPY)
+
+prophet_plot_components(m1, forecast_SPY)
+plot(m1, forecast_SPY)
+
+plot(df_SPY$y)
+lines(forecast_SPY$yhat, col="red", lw=3)
+
+resid_SPY = df_SPY_train$y - forecast_SPY$yhat[1:n_train]
+ts.plot(resid_SPY)
+
+acf(resid_SPY)
+hist(resid_SPY)
+############################## measures for all 36 periods
+data_pred = forecast_SPY$yhat[(n_train+1):n]
+data_true = df_SPY_test$y
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+print('--------------')
+############################## measures for pre-pandemic
+data_pred = forecast_SPY$yhat[(n_train+1):(n-24)]
+data_true = df_SPY_test$y[1:12]
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+print('--------------')
+############################## measures for post-pandemic
+data_pred = forecast_SPY$yhat[(n-23):n]
+data_true = df_SPY_test$y[13:36]
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+
+```
+
+###################### DJ ##########################
+
+```{r predict DJ}
+library(prophet)
+m2 <- prophet(df_DJ_train, changepoint.prior.scale = 0.3)
+
+future_DJ <- make_future_dataframe(m2, periods = n_ahead, freq = 'month')
+
+forecast_DJ <- predict(m2, future_DJ)
+
+prophet_plot_components(m2, forecast_DJ)
+plot(m2, forecast_DJ)
+
+plot(df_DJ$y)
+lines(forecast_DJ$yhat, col="red", lw=3)
+
+resid_DJ = df_DJ_train$y - forecast_DJ$yhat[1:n_train]
+ts.plot(resid_DJ)
+
+acf(resid_DJ)
+hist(resid_DJ)
+
+data_pred = forecast_DJ$yhat[(n_train+1):n]
+data_true = df_DJ_test$y
+
+############################## measures for all 36 periods
+data_pred = forecast_DJ$yhat[(n_train+1):n]
+data_true = df_DJ_test$y
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+print('--------------')
+############################## measures for pre-pandemic
+data_pred = forecast_DJ$yhat[(n_train+1):(n-24)]
+data_true = df_DJ_test$y[1:12]
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+print('--------------')
+############################## measures for post-pandemic
+data_pred = forecast_DJ$yhat[(n-23):n]
+data_true = df_DJ_test$y[13:36]
+
+### Mean Squared Prediction Error (MSPE)
+mean((data_pred-data_true)^2)
+### Mean Absolute Prediction Error (MAE)
+mean(abs(data_pred-data_true))
+### Mean Absolute Percentage Error (MAPE)
+mean(abs(data_pred-data_true)/data_true)
+### Precision Measure (PM)
+sum((data_pred-data_true)^2)/sum((data_true-mean(data_true))^2)
+
+
+```
+
+

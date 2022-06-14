@@ -1,0 +1,546 @@
+---
+title: "VAR Model"
+author: "Ajay Krishna Manoj"
+date: "4/18/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Libarary
+
+```{r}
+library(zoo,warn.conflicts=FALSE)
+library(lubridate,warn.conflicts=FALSE)
+library(mgcv,warn.conflicts=FALSE)
+library(rugarch,warn.conflicts=FALSE)
+library(readxl)
+library(xts)
+library(tseries)
+library(urca)
+```
+
+### Data Upload
+
+```{r}
+data <- read_excel("Data_Template.xlsx")
+DJ_Constituents <- read.csv("final.csv", head = TRUE)
+
+#dates to date format
+data$Date<-as.Date(data$Date, format='%Y-%m-%d/')
+data = data[order(data$Date), ]
+data<-data[1:(nrow(data)),]
+data_BACKUP=data
+
+```
+
+## Creating ts and Getting Macrofactors Time Series
+
+```{r}
+Date<-as.Date(data$Date, format='%Y-%m-%d')
+xts_SPY=xts(data[,"SPY"],Date)
+xts_DJ=xts(data[,"DJ"],Date)
+xts_CPI=xts(data[,"CPI"],Date)
+xts_PPI=xts(data[,"PPI"],Date)
+xts_Real_GDP=xts(data[,"Real GDP"],Date)
+xts_Industrial_Production=xts(data[,"Industrial Production"],Date)
+xts_Balance_of_Trade=xts(data[,"Balance of Trade"],Date)
+xts_M1=xts(data[,"M1"],Date)
+xts_Housing_Starts=xts(data[,"Housing Starts"],Date)
+xts_Employment_Report=xts(data[,"Employment Report"],Date)
+xts_Treasury_Yields=xts(data[,"Treasury Yields"],Date)
+ts_data=cbind(xts_SPY,xts_DJ,xts_CPI,xts_PPI,xts_Real_GDP, xts_Industrial_Production,xts_Balance_of_Trade,xts_M1,xts_Housing_Starts,xts_Employment_Report,xts_Treasury_Yields)
+
+```
+
+
+```{r}
+cor(ts_data)
+
+```
+
+
+
+## Creating Diff Data
+
+```{r}
+ts_data2=ts_data
+for(i in 1:ncol(ts_data)){
+  ts_data2[,i]=diff(ts_data[,i],1)
+}
+
+ts_data2=ts_data2[2:nrow(ts_data2),]
+
+```
+
+
+
+
+## Check Co-integration of Differenced SPY and DJ  
+Yes it is cointegrated as p_value=0.01 : We reject the null hypothesis of Non-Stationarity
+
+```{r}
+#ts_data2
+xts_SPY2=xts_SPY
+xts_DJ2=xts_DJ
+
+
+ts.merge <- merge(xts_SPY2[1:(nrow(xts_SPY2)-10)],xts_DJ2[1:(nrow(xts_SPY2)-10)], join='inner')
+lm.SPYDJ <- lm(ts.merge[,1]~ts.merge[,2])
+summary(lm.SPYDJ)
+coef.sp <-lm.SPYDJ$coef
+tr.tssp<-xts((coef.sp[2]*xts_DJ2[1:(nrow(ts.merge)-10)]+coef.sp[1]),Date[1:length(xts_DJ2[1:(nrow(ts.merge)-10)])])
+## Evaluate potential cointegration between SPY & DJ
+ts.merge <- merge(xts_SPY2[1:(nrow(ts.merge)-10)],tr.tssp, join='inner')
+co.resid <- ts.merge[,1]-ts.merge[,2]
+adf.test(co.resid)
+summary(ur.df(co.resid, type="none",selectlags="BIC"))
+summary(ur.df(co.resid, type="drift",selectlags="BIC"))
+summary(ur.df(co.resid, type="trend",selectlags="BIC"))
+
+```
+
+### Checking for stationarity
+```{r}
+for(i in 1:ncol(ts_data)){
+  par(mfrow=c(2,2))
+  acf(ts_data[,i])
+  acf(ts_data2[,i])
+  ts.plot(ts_data2[,i])
+  ts.plot(ts_data[,i])
+}
+```
+
+
+
+```{r}
+##312 is 2017-12-31 test split
+train_x=ts_data[1:312,-c(1)]
+test_x=ts_data[313:nrow(ts_data),-c(1)]
+Date<-as.Date(train_x$Date, format='%Y-%m-%d')
+Date_test<-as.Date(test_x$Date, format='%Y-%m-%d')
+Date_full<-as.Date(data$Date, format='%Y-%m-%d')
+
+### Differenced data
+dtrain_x=ts_data2[1:311,-c(1)]
+dtest_x=ts_data2[312:nrow(ts_data2),-c(1)]
+
+Date<-date(dtrain_x)
+Date_test<-date(dtest_x)
+Date_full<-date(ts_data2)
+
+```
+
+
+
+```{r}
+###VAR Model##
+library(vars)
+##Model Selection
+# train_x
+# dtrain_x
+VARselect(train_x, lag.max = 20)
+par(mfrow=c(2,1))
+model=VARselect(train_x)
+plot(model$criteria[1,] ,xlab ="Order", ylab ="AIC")
+plot(model$criteria[3,] ,xlab ="Order", ylab ="BIC")
+
+```
+
+
+### BIC VS AIC MODEL
+```{r}
+## Model Fitting: Unrestricted VAR
+
+BIC_ORDER=1
+AIC_ORDER=3
+
+aic.model.var=VAR(train_x, p=AIC_ORDER)
+bic.model.var=VAR(train_x, p=BIC_ORDER)
+
+summary(aic.model.var$varresult$DJ)
+cat("\n***************************************************")
+cat("\n***************************************************")
+cat("\n***************************************************")
+summary(restrict(aic.model.var)$varresult$DJ)
+cat("\n***************************************************")
+cat("\n***************************************************")
+cat("\n***************************************************")
+summary(bic.model.var$varresult$DJ)
+
+
+
+```
+
+
+** Inference** We see that the BIC Model: only Industrial.Production.l1 is significant
+
+
+
+# Do the other lags help?
+```{r}
+
+
+
+
+library(aod)
+## Coefficients for orders 3 to 7
+coef.xts_DJ = coefficients(aic.model.var)$DJ[11:(10*AIC_ORDER),1]
+## Covariance matrix of the coefficients
+var.model =vcov(aic.model.var)[12:(AIC_ORDER*10+1),12:(AIC_ORDER*10+1)] 
+## Does a smaller order fit the model equally well? Apply Wald Test
+## Apply Wald Test
+wald.test(b = coef.xts_DJ, var.model, Terms = seq(1, dim(var.model)[1],1))
+
+
+
+
+
+```
+
+Reject null hypothesis p_value<0.05. Hence the lagged order would be signifiant.
+AIC order is signifianct.
+
+
+
+### Granger Causality : alance of Trade and Housing Starts granger causes DJ
+
+```{r}
+
+
+#train_x
+
+## Granger Causality: Wald Test
+library(aod)
+coef.xts_DJ = coefficients(aic.model.var)$DJ[-(10*AIC_ORDER+1),1]
+var.model =vcov(aic.model.var)[2:(AIC_ORDER*10+1),2:(AIC_ORDER*10+1)] 
+## Granger Causality: CPI
+wald.test(b=coef.xts_DJ, var.model, Terms=seq(2, 10*AIC_ORDER, 10))
+## Granger Causality: PPI
+wald.test(b=coef.xts_DJ, var.model, Terms=seq(3, 10*AIC_ORDER, 10))
+## Granger Causality: Real GDP
+wald.test(b=coef.xts_DJ, var.model, Terms=seq(4, 10*AIC_ORDER, 10))
+## Granger Causality: Balance of Trade
+wald.test(b=coef.xts_DJ, var.model, Terms=seq(5, 10*AIC_ORDER, 10))
+## Granger Causality: Industrial Production
+wald.test(b=coef.xts_DJ, var.model, Terms=seq(6, 10*AIC_ORDER, 10))
+
+## Granger Causality: M1
+wald.test(b=coef.xts_DJ, var.model, Terms=seq(7, 10*AIC_ORDER, 10))
+## Granger Causality: Housing Starts
+wald.test(b=coef.xts_DJ, var.model, Terms=seq(8, 10*AIC_ORDER, 10))
+## Granger Causality: Employment Report
+wald.test(b=coef.xts_DJ, var.model, Terms=seq(9, 10*AIC_ORDER, 10))
+## Granger Causality: Treasury Yields
+wald.test(b=coef.xts_DJ, var.model, Terms=seq(10, 10*AIC_ORDER, 10))
+
+#NON-STANDARIZED: Balance of Trade and Housing Starts granger causes DJ
+
+```
+
+Test the null hypothesis that all the coefficients on lagged values of ts are zero in the equation for dj; rejecting the null hypothesis means that ts does Granger-cause dj
+
+Balance of Trade
+M1
+Employment Report
+#Treasury Yields
+
+
+
+
+## Step Wise Model
+```{r}
+step.model = step(lm(y~.,data = aic.model.var$varresult$DJ$model),
+direction = "backward",steps = 3, keep=function(model, aic) list(model = model, aic = aic))
+summary(step.model$keep[["model", 3]])
+
+
+```
+
+
+
+
+```{r}
+
+
+normality.test(aic.model.var)
+arch.test(aic.model.var)
+serial.test(aic.model.var)
+cat("\n***************************************************")
+cat("\n***************************************************")
+cat("\n***************************************************")
+
+normality.test(restrict(aic.model.var))
+arch.test(restrict(aic.model.var))
+serial.test(restrict(aic.model.var))
+
+cat("\n***************************************************")
+cat("\n***************************************************")
+cat("\n***************************************************")
+
+```
+
+
+Normality Assumption: JB Test : p-value < 2.2e-16 Normality: p-values are  smaller than 0.05: We reject the null hypothesis of normality
+
+Constant Variances Assumption: ARCH test: p-value < 2.2e-16 . p-value smaller than 0.05, Hence we reject the null hypothesis of constant variances
+
+Uncorrelated Errors Assumption:  Portmanteau test: p-value = 5.174e-14 p-value smaller than 0.05, Hence we reject the null hypothesis of uncorrelated errors
+
+
+
+
+
+### Forecasting Using unRestricted VAR
+
+```{r}
+
+n_ahead = 3
+n_test_quarter=36
+limits=n_test_quarter/n_ahead
+DJ.fcst = matrix(NA, n_test_quarter, 1)
+for (idx in 1:limits){
+nfit = nrow(ts_data) - n_test_quarter + (idx-1)*n_ahead
+data = ts_data[1:nfit,]
+final.model = VAR(data, p=AIC_ORDER)
+pred.model = predict(final.model,n.ahead=n_ahead)
+DJ.fcst[((idx-1)*n_ahead+1):(idx*n_ahead)] = pred.model[[1]]$DJ[,1]
+}
+
+
+# 
+# 
+# ## Daily Prediction over a period of 10 days : 1-day rolling
+# DJ.fcst = NULL
+# ubound.10 = NULL
+# lbound.10 = NULL
+# for(i in 1:26){
+#   nfit = i
+#   #data2 = train_x
+#     #dtrain_x
+# 	data2 = c(train_x,test_x[1:nfit,])
+#   outprice=VAR(data2, p=AIC_ORDER)
+#   pred.model=predict(outprice,n.ahead=1)
+#   pred.1= pred.model[[1]]$DJ[,1]
+#   DJ.fcst=c(DJ.fcst,pred.1)
+# }
+# 
+# 
+# pred.model=predict(model.var,n.ahead=36)
+# DJ.fcst2 = pred.model[[1]]$DJ[,1]
+actuals2= ts_data$DJ[(nrow(ts_data)-35):nrow(ts_data)]
+DJ.fcst=DJ.fcst[1:36]
+predicted2=DJ.fcst
+
+#n = nrow(ts_data2[1:(nrow(ts_data2)-22),])
+n = nrow(ts_data2)
+nfit = n-36
+
+
+dj_plot=unlist(data_BACKUP[,3])
+  #unlist(data[(n-20):n,3])
+ymin = min(c(dj_plot,DJ.fcst))
+ymax = max(c(dj_plot,DJ.fcst))
+plot(Date_full[(n-50):n], dj_plot[(n-50):n],type="l", ylim=c(ymin,ymax), xlab="Time", ylab="DJ Index")
+points(Date_full[(nfit+1):n],DJ.fcst,col="red",lwd=2)
+#lines(Date_full[(nfit+1):n],DJ.fcst2,col="blue",lwd=2)
+#legend(1990,16000,legend=c("Trend+ARMA","ARIMA","VAR"),col=c("red","blue","green"),lty=1)
+
+par(mfrow=c(2,2))
+resids <- DJ.fcst-actuals2
+plot(resids, ylab='Residuals',type='o',main="Residual Plot")
+abline(h=0)
+hist(resids,xlab='Residuals',main='Histogram: Residuals')
+acf(resids,main=" ACF: Residuals")
+pacf(resids,main=" PACF: Residuals")
+qqnorm(resids)
+```
+### Forecast Accuracy Unrestricted
+
+```{r}
+
+# data.test=dtest_x[,"DJ"]
+# fore.series.1=DJ.fcst ##Rolling
+
+data.test=actuals2
+fore.series.1=predicted2
+
+#Compute Accuracy Measures 
+#Mean Squared Prediction Error (MSPE)
+mean((fore.series.1 - data.test)^2)
+#Mean Absolute Prediction Error (MAE)
+mean(abs(fore.series.1 - data.test))
+#Mean Absolute Percentage Error (MAPE)
+mean(abs(fore.series.1 - data.test)/abs(data.test))
+#Precision Measure (PM)
+sum((fore.series.1 - data.test)^2)/sum((data.test-mean(data.test))^2)
+
+
+
+### Pre-Covid vs Post-Covid 
+
+cat("\n Pre Covid \n")
+data.test=actuals2[1:12]
+fore.series.1=predicted2[1:12]
+
+#Compute Accuracy Measures 
+#Mean Squared Prediction Error (MSPE)
+mean((fore.series.1 - data.test)^2)
+#Mean Absolute Prediction Error (MAE)
+mean(abs(fore.series.1 - data.test))
+#Mean Absolute Percentage Error (MAPE)
+mean(abs(fore.series.1 - data.test)/abs(data.test))
+#Precision Measure (PM)
+sum((fore.series.1 - data.test)^2)/sum((data.test-mean(data.test))^2)
+
+
+cat("\n Post Covid \n")
+data.test=actuals2[13:length(actuals2)]
+fore.series.1=predicted2[13:length(actuals2)]
+
+#Compute Accuracy Measures 
+#Mean Squared Prediction Error (MSPE)
+mean((fore.series.1 - data.test)^2)
+#Mean Absolute Prediction Error (MAE)
+mean(abs(fore.series.1 - data.test))
+#Mean Absolute Percentage Error (MAPE)
+mean(abs(fore.series.1 - data.test)/abs(data.test))
+#Precision Measure (PM)
+sum((fore.series.1 - data.test)^2)/sum((data.test-mean(data.test))^2)
+
+
+```
+
+
+
+
+
+
+
+
+### Forecasting Using Restricted VAR
+
+```{r}
+
+n_ahead = 3
+n_test_quarter=36
+limits=n_test_quarter/n_ahead
+DJ.fcst = matrix(NA, n_test_quarter, 1)
+for (idx in 1:limits){
+nfit = nrow(ts_data) - n_test_quarter + (idx-1)*n_ahead
+data = ts_data[1:nfit,]
+final.model = VAR(data, p=AIC_ORDER)
+pred.model = predict(restrict(final.model),n.ahead=n_ahead)
+DJ.fcst[((idx-1)*n_ahead+1):(idx*n_ahead)] = pred.model[[1]]$DJ[,1]
+}
+
+
+# 
+# 
+# ## Daily Prediction over a period of 10 days : 1-day rolling
+# DJ.fcst = NULL
+# ubound.10 = NULL
+# lbound.10 = NULL
+# for(i in 1:26){
+#   nfit = i
+#   #data2 = train_x
+#     #dtrain_x
+# 	data2 = c(train_x,test_x[1:nfit,])
+#   outprice=VAR(data2, p=AIC_ORDER)
+#   pred.model=predict(outprice,n.ahead=1)
+#   pred.1= pred.model[[1]]$DJ[,1]
+#   DJ.fcst=c(DJ.fcst,pred.1)
+# }
+# 
+# 
+# pred.model=predict(model.var,n.ahead=36)
+# DJ.fcst2 = pred.model[[1]]$DJ[,1]
+actuals2= ts_data$DJ[(nrow(ts_data)-35):nrow(ts_data)]
+DJ.fcst=DJ.fcst[1:36]
+predicted2=DJ.fcst
+
+#n = nrow(ts_data2[1:(nrow(ts_data2)-22),])
+n = nrow(ts_data2)
+nfit = n-36
+
+
+dj_plot=unlist(data_BACKUP[,3])
+  #unlist(data[(n-20):n,3])
+ymin = min(c(dj_plot,DJ.fcst))
+ymax = max(c(dj_plot,DJ.fcst))
+plot(Date_full[(n-50):n], dj_plot[(n-50):n],type="l", ylim=c(ymin,ymax), xlab="Time", ylab="DJ Index")
+points(Date_full[(nfit+1):n],DJ.fcst,col="red",lwd=2)
+#lines(Date_full[(nfit+1):n],DJ.fcst2,col="blue",lwd=2)
+#legend(1990,16000,legend=c("Trend+ARMA","ARIMA","VAR"),col=c("red","blue","green"),lty=1)
+
+par(mfrow=c(2,2))
+resids <- DJ.fcst-actuals2
+plot(resids, ylab='Residuals',type='o',main="Residual Plot")
+abline(h=0)
+hist(resids,xlab='Residuals',main='Histogram: Residuals')
+acf(resids,main=" ACF: Residuals")
+pacf(resids,main=" PACF: Residuals")
+qqnorm(resids)
+```
+### Forecast Accuracy
+
+```{r}
+
+# data.test=dtest_x[,"DJ"]
+# fore.series.1=DJ.fcst ##Rolling
+
+data.test=actuals2
+fore.series.1=predicted2
+
+#Compute Accuracy Measures 
+#Mean Squared Prediction Error (MSPE)
+mean((fore.series.1 - data.test)^2)
+#Mean Absolute Prediction Error (MAE)
+mean(abs(fore.series.1 - data.test))
+#Mean Absolute Percentage Error (MAPE)
+mean(abs(fore.series.1 - data.test)/abs(data.test))
+#Precision Measure (PM)
+sum((fore.series.1 - data.test)^2)/sum((data.test-mean(data.test))^2)
+
+
+
+### Pre-Covid vs Post-Covid 
+
+cat("\n Pre Covid \n")
+data.test=actuals2[1:12]
+fore.series.1=predicted2[1:12]
+
+#Compute Accuracy Measures 
+#Mean Squared Prediction Error (MSPE)
+mean((fore.series.1 - data.test)^2)
+#Mean Absolute Prediction Error (MAE)
+mean(abs(fore.series.1 - data.test))
+#Mean Absolute Percentage Error (MAPE)
+mean(abs(fore.series.1 - data.test)/abs(data.test))
+#Precision Measure (PM)
+sum((fore.series.1 - data.test)^2)/sum((data.test-mean(data.test))^2)
+
+
+cat("\n Post Covid \n")
+data.test=actuals2[13:length(actuals2)]
+fore.series.1=predicted2[13:length(actuals2)]
+
+#Compute Accuracy Measures 
+#Mean Squared Prediction Error (MSPE)
+mean((fore.series.1 - data.test)^2)
+#Mean Absolute Prediction Error (MAE)
+mean(abs(fore.series.1 - data.test))
+#Mean Absolute Percentage Error (MAPE)
+mean(abs(fore.series.1 - data.test)/abs(data.test))
+#Precision Measure (PM)
+sum((fore.series.1 - data.test)^2)/sum((data.test-mean(data.test))^2)
+
+
+```
+
+
+
+
