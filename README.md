@@ -15,4 +15,4 @@ Based on the goodness of fit metrics from residual analysis, and prediction eval
 2. ARMA-GARCH and eGARCH have the best predictive power with less-than-one Precision Error (PM) despite the limitation in short-run flat predictions and those from ARIMA/SARIMA follows the movement and keep up with the changes ; and 
 3. Prophet and LSTM might be particularly good in dealing with predicting time series with shocks.
 
-Detailed report can be accessed !here[Report_Team_9.pdf]
+Detailed report can be accessed [here](https://github.com/sampangtf/US-stock-index-time-series-prediction/blob/main/Report_Team_9.pdf)
