@@ -19,4 +19,4 @@ Based on the goodness of fit metrics from residual analysis, and prediction eval
 Detailed report in this repo can be accessed [here](https://github.com/sampangtf/US-stock-index-time-series-prediction/blob/main/Report_Team_9.pdf).
 
 ## Model 
-The univariate and multivariate time series models are coded in R, while the deep learning models are coded in python. They can all be found in the separate folders in this repo.
+The univariate and multivariate time series models are coded in R, while the deep learning models are coded in python. They can all be found in the corresponding folders in this repo.
